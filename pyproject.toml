@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel", "Cython"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "uringpy"
+version = "0.1.0"
+description = "A GIL-aware io_uring runtime for CPython that scales across cores within one interpreter"
+readme = "README.md"
+requires-python = ">=3.9"
+license = {text = "MIT"}
+authors = [{name = "Marimuthu Velayutham"}]
+keywords = ["io_uring", "asyncio", "GIL", "free-threading", "event-loop", "multicore", "cython"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX :: Linux",
+    "Topic :: System :: Networking",
+    "Intended Audience :: Developers",
+]
+
+[project.urls]
+Homepage = "https://github.com/marimuthuvm/uringpy"
+Repository = "https://github.com/marimuthuvm/uringpy"

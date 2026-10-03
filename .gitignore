@@ -1,0 +1,30 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Cython build artifacts
+*.c.o
+*.so
+uringpy/engine.c
+build/
+dist/
+*.egg-info/
+
+# Virtual environments
+.venv/
+.venv-gil/
+venv/
+env/
+
+# Editor / OS
+.idea/
+.vscode/
+.DS_Store
+
+# Benchmark output (regenerate with benchmarks/bench_throughput.py)
+benchmarks/results/*.json
+benchmarks/results/latest.md
+
+# Paper / manuscript — kept out of the public code repo (submitted via journal channels)
+paper/

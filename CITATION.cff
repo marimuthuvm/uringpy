@@ -1,0 +1,23 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+title: "uringpy: a GIL-aware io_uring runtime for CPython"
+authors:
+  - family-names: Velayutham
+    given-names: Marimuthu
+version: 0.1.0
+date-released: 2026-10-03
+license: MIT
+keywords:
+  - io_uring
+  - asyncio
+  - Python
+  - GIL
+  - free-threading
+  - event-loop
+  - multicore
+abstract: >-
+  A completion-reaping io_uring runtime for CPython that drives the
+  accept/recv/send protocol inside a single nogil C region, enabling worker
+  threads to scale across cores within one interpreter where asyncio-family
+  loops collapse under GIL contention. Includes reproducible single-node and
+  two-node benchmarks and a GIL-vs-syscall isolation probe.

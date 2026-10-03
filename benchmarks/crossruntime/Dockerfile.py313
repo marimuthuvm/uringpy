@@ -1,0 +1,36 @@
+# Self-contained cross-runtime benchmark image on Python 3.13 (required by
+# uringloop and talyn) with a modern Rust toolchain (required by uringcore,
+# Rust edition 2024). Builds uringpy from source and installs the competing
+# asyncio io_uring event loops that succeed in this environment.
+FROM python:3.13-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc g++ make git curl wrk strace ca-certificates \
+    liburing-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Modern Rust (uringcore requires edition 2024 / rustc >= 1.85).
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
+    sh -s -- -y --profile minimal --default-toolchain stable
+ENV PATH="/root/.cargo/bin:${PATH}"
+
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel Cython uvloop liburing maturin
+
+WORKDIR /app
+COPY . /app
+
+# uringpy (our runtime)
+RUN pip install --no-cache-dir -e .
+
+# uringloop (Cython proactor; needs py>=3.13)
+RUN git clone --depth 1 https://github.com/thearchitector/uringloop /opt/uringloop \
+    && pip install --no-cache-dir /opt/uringloop || echo "[warn] uringloop failed"
+
+# uringcore (Rust/PyO3; needs modern Rust). Point TLS libraries at the system
+# CA bundle so its build-time downloader (httpx) can verify certificates.
+ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
+ENV REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
+RUN pip install --no-cache-dir certifi \
+    && (pip install --no-cache-dir uringcore || echo "[warn] uringcore failed")
+
+CMD ["bash", "benchmarks/crossruntime/run.sh"]

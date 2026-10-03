@@ -1,0 +1,50 @@
+# Free-threaded (no-GIL) build to measure whether the GIL-aware advantage
+# shrinks when the GIL is gone. With the GIL removed, asyncio/thread should
+# finally scale; the paper must report this honestly as the boundary of the
+# contribution (the technique matters most for the large GIL installed base).
+#
+# The official free-threaded image tags are not always reachable, so we build a
+# free-threaded CPython from source (./configure --disable-gil).
+#
+#   docker build -f Dockerfile.freethreaded -t uringpy:gil-ft .
+#   docker run --rm --security-opt seccomp=unconfined uringpy:gil-ft \
+#       bash benchmarks/scaling_matrix.sh
+ARG PYVER=3.13.7
+
+FROM debian:bookworm-slim AS pybuild
+ARG PYVER
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential curl ca-certificates \
+    libssl-dev zlib1g-dev libffi-dev libbz2-dev libreadline-dev \
+    libsqlite3-dev liblzma-dev \
+    && rm -rf /var/lib/apt/lists/*
+RUN curl -fsSL "https://www.python.org/ftp/python/${PYVER}/Python-${PYVER}.tgz" -o /tmp/py.tgz \
+    && tar -xzf /tmp/py.tgz -C /tmp
+RUN cd /tmp/Python-${PYVER} \
+    && ./configure --disable-gil --enable-optimizations --prefix=/opt/pyft \
+    && make -j"$(nproc)" && make altinstall
+RUN ln -sf /opt/pyft/bin/python3.13t /opt/pyft/bin/python3ft \
+    && /opt/pyft/bin/python3ft -c "import sysconfig;print('gil_disabled',bool(sysconfig.get_config_var('Py_GIL_DISABLED')))"
+
+FROM debian:bookworm-slim
+ARG LIBURING=2.6
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc g++ make wrk curl ca-certificates \
+    libffi8 zlib1g \
+    && rm -rf /var/lib/apt/lists/*
+# bookworm's liburing predates io_uring_setup_buf_ring; build a recent one.
+RUN curl -fsSL "https://github.com/axboe/liburing/archive/refs/tags/liburing-${LIBURING}.tar.gz" -o /tmp/lu.tgz \
+    && tar -xzf /tmp/lu.tgz -C /tmp \
+    && cd /tmp/liburing-liburing-${LIBURING} \
+    && ./configure --prefix=/usr/local && make -j"$(nproc)" && make install \
+    && ldconfig
+COPY --from=pybuild /opt/pyft /opt/pyft
+ENV PATH=/opt/pyft/bin:$PATH
+WORKDIR /app
+COPY . /app
+RUN python3ft -m pip install --no-cache-dir --upgrade pip setuptools wheel Cython \
+    && python3ft -m pip install --no-cache-dir -e .
+# scaling_matrix.sh calls `python3`; point it at the free-threaded interpreter.
+RUN ln -sf /opt/pyft/bin/python3ft /usr/local/bin/python3
+
+CMD ["bash", "benchmarks/scaling_matrix.sh"]
