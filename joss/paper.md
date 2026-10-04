@@ -10,7 +10,7 @@ tags:
   - performance
 authors:
   - name: Marimuthu Velayutham
-    orcid: 0000-0000-0000-0000
+    orcid: 0009-0007-7352-5552
     affiliation: 1
 affiliations:
   - name: Independent Researcher

@@ -4,6 +4,7 @@ title: "uringpy: a GIL-aware io_uring runtime for CPython"
 authors:
   - family-names: Velayutham
     given-names: Marimuthu
+    orcid: "https://orcid.org/0009-0007-7352-5552"
 version: 0.1.0
 date-released: 2026-10-03
 license: MIT
