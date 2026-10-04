@@ -56,9 +56,40 @@ A manuscript describing the full methodology and measurements is in preparation.
 
 ```bash
 sudo apt-get install -y liburing-dev gcc
-pip install -e .
+pip install uringpy        # or: pip install -e .  (from a clone)
 pytest
 ```
+
+## Usage
+
+Run a sharded HTTP server with 2 worker threads, each a `nogil` C reactor on its
+own `io_uring` ring and `SO_REUSEPORT` socket:
+
+```bash
+python3 benchmarks/sharded_server.py --engine uringpy --mode thread --workers 2 --port 8080
+# in another shell:
+curl http://127.0.0.1:8080/
+```
+
+Or drive the engine directly:
+
+```python
+import socket
+from uringpy import URingEngine
+
+RESPONSE = b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: keep-alive\r\n\r\nOK"
+
+lst = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+lst.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+lst.bind(("0.0.0.0", 8080))
+lst.listen(1024)
+
+engine = URingEngine(entries=8192, slot_size=4096, total_slots=32768)
+engine.set_response(RESPONSE)
+engine.serve_forever_echo(lst.fileno())  # runs the accept/recv/send loop in C (GIL released)
+```
+
+> Note: `io_uring` requires Linux; under Docker, add `--security-opt seccomp=unconfined`.
 
 ## Reproduce the benchmarks
 
