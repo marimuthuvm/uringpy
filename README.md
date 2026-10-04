@@ -1,6 +1,10 @@
 # uringpy
 # uringpy
 
+[![PyPI](https://img.shields.io/pypi/v/uringpy.svg)](https://pypi.org/project/uringpy/)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.23129560.svg)](https://doi.org/10.5281/zenodo.23129560)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 A **GIL-aware `io_uring` runtime for CPython**: it reaps completions and drives
 the entire accept/recv/send protocol inside a single `nogil` C region, so that
 worker threads scale across cores **within one interpreter** — where
