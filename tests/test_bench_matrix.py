@@ -54,6 +54,13 @@ def test_parse_server_stats_sums_workers_and_skips_ratios():
                  "syscalls": 44}
 
 
+def test_parse_runtime():
+    log = "[runtime] python=3.14.7 gil_enabled=0\n[uringpy/thread] starting 4 worker(s)\n"
+    assert bm.parse_runtime(log) == ("3.14.7", "off")
+    assert bm.parse_runtime("[runtime] python=3.11.9 gil_enabled=1\n") == ("3.11.9", "on")
+    assert bm.parse_runtime("nothing here") == ("", "")
+
+
 def test_cpu_usage():
     before = bm.parse_proc_stat("cpu  100 0 100 800 0 0 0 0 0 0\n"
                                 "cpu0 50 0 50 400 0 0 0 0 0 0\n"
@@ -87,7 +94,7 @@ def test_ratio_ci():
 def _row(engine, workers, rps, status="ok", **kw):
     row = {k: "" for k in bm.CSV_FIELDS}
     row.update(engine=engine, mode="thread", workers=workers, resp_size=13,
-               max_batch=0, status=status, rps=rps, client_cpu_pct=40.0,
+               max_batch=0, status=status, rps=rps, srv_gil="on", client_cpu_pct=40.0,
                server_cpu_pct=60.0, lat_p50_ms=1.0, lat_p99_ms=2.0)
     row.update(kw)
     return row
@@ -102,7 +109,7 @@ def test_summarize_scaling_and_flags():
     lines = [l for l in text.splitlines() if l.startswith("| uring")]
     assert len(lines) == 3
     one, four, missing = lines
-    assert "| 100 |" in one and "1.00×" in one
+    assert "| 100 |" in one and "1.00×" in one and "| on |" in one
     assert "| 0.020 |" in one and "| 200.0 |" in one     # syscalls/req, compl/enter
     assert "3.00× ±" in four and "load generator may be the limit" in four
     assert "no successful run: engine unavailable" in missing

@@ -30,6 +30,11 @@ Engines (--engine):
     uringcore io_uring loop        uringloop  io_uring loop
     (the last three are used only if installed in the image)
 
+  The same loops through asyncio's Protocol API instead of streams -- no
+  StreamReader/StreamWriter layer, the reply is written from data_received.
+  This is the fastest way to use an asyncio loop and so the stronger baseline.
+    asyncio-proto   stdlib loop    uvloop-proto   libuv-based loop
+
   Application workload: every request goes through the same Python handler
   (app_workload.handle_request).
     uringpy-app  URingEngine.serve_forever_app(): transport in C, GIL taken
@@ -327,7 +332,10 @@ def asyncio_worker(host, port, wid, app=False, loop_name="asyncio"):
     loop = _new_loop(loop_name)
     asyncio.set_event_loop(loop)
     server = loop.run_until_complete(asyncio.start_server(handle, sock=listener))
+    _run_loop(loop, server)
 
+
+def _run_loop(loop, server):
     # signal.signal() only works in the main thread; in --mode thread the parent
     # installs the handler instead (see run()).
     if threading.current_thread() is threading.main_thread():
@@ -340,9 +348,35 @@ def asyncio_worker(host, port, wid, app=False, loop_name="asyncio"):
         loop.close()
 
 
-def _loop_worker(loop_name):
+def asyncio_proto_worker(host, port, wid, loop_name="asyncio"):
+    """One event-loop worker using the Protocol API: the canned response is
+    written straight from data_received, with no streams layer in between."""
+    import asyncio
+
+    resp = HTTP_RESPONSE
+
+    class Echo(asyncio.Protocol):
+        __slots__ = ("transport",)
+
+        def connection_made(self, transport):
+            self.transport = transport
+
+        def data_received(self, data):
+            self.transport.write(resp)
+
+    listener = make_reuseport_listener(host, port)
+    loop = _new_loop(loop_name)
+    asyncio.set_event_loop(loop)
+    server = loop.run_until_complete(loop.create_server(Echo, sock=listener))
+    _run_loop(loop, server)
+
+
+def _loop_worker(loop_name, proto=False):
     def worker(host, port, wid):
-        asyncio_worker(host, port, wid, loop_name=loop_name)
+        if proto:
+            asyncio_proto_worker(host, port, wid, loop_name=loop_name)
+        else:
+            asyncio_worker(host, port, wid, loop_name=loop_name)
     return worker
 
 
@@ -352,7 +386,9 @@ WORKERS = {
     "py-uring": py_uring_worker,
     "py-epoll": py_epoll_worker,
     "asyncio": asyncio_worker,
+    "asyncio-proto": _loop_worker("asyncio", proto=True),
     "uvloop": _loop_worker("uvloop"),
+    "uvloop-proto": _loop_worker("uvloop", proto=True),
     "uringcore": _loop_worker("uringcore"),
     "uringloop": _loop_worker("uringloop"),
     "uringpy-app": lambda host, port, wid: uringpy_worker(host, port, wid, app=True),
@@ -417,14 +453,21 @@ def main(argv=None):
     # Fail before starting any worker if this image lacks the engine, rather
     # than leaving a server with some workers dead.
     try:
-        if args.engine in ("uvloop", "uringcore", "uringloop"):
-            _new_loop(args.engine).close()
+        if args.engine in ("uvloop", "uvloop-proto", "uringcore", "uringloop"):
+            _new_loop(args.engine.replace("-proto", "")).close()
         elif args.engine == "c-epoll":
             from uringpy import EpollEngine  # noqa: F401
         elif args.engine in ("uringpy", "uringpy-app", "py-uring"):
             from uringpy import URingEngine  # noqa: F401
     except Exception as exc:
         sys.exit(f"[{args.engine}] engine unavailable in this environment: {exc!r}")
+    # Record what actually runs. On a free-threaded build, importing an
+    # extension that is not free-threading-ready turns the GIL back on, so the
+    # state is read here, after the engine's modules have been imported.
+    gil_check = getattr(sys, "_is_gil_enabled", None)
+    gil_on = True if gil_check is None else bool(gil_check())
+    print(f"[runtime] python={sys.version.split()[0]} gil_enabled={int(gil_on)}",
+          flush=True)
     print(f"[{args.engine}/{args.mode}] starting {args.workers} worker(s)",
           flush=True)
     run(worker_fn, args.workers, args.mode, args.host, args.port)

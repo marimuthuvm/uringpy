@@ -20,8 +20,10 @@ Two ways to run the server:
 Experiments (--experiment), each a preset you can override with --engines,
 --modes, --workers, --resp-sizes and --max-batch:
 
-  scaling    uringpy vs asyncio, thread vs process, 1/2/4 workers
-  app        the same matrix with a Python handler per request
+  scaling    uringpy vs asyncio (streams and Protocol API), thread vs process,
+             1/2/4 workers
+  app        uringpy vs asyncio with a Python handler per request
+  baselines  asyncio and uvloop, each through streams and the Protocol API
   factorial  2x2 ablation: {io_uring, epoll} x {loop in C, loop in Python}
   batch      uringpy with the completions-per-enter cap swept from 1 to unlimited
   loops      asyncio, uvloop, uringcore, uringloop (needs the cross-runtime image)
@@ -61,8 +63,10 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 
 EXPERIMENTS = {
-    "scaling": dict(engines=["uringpy", "asyncio"], modes=["thread", "process"],
-                    workers=[1, 2, 4]),
+    "scaling": dict(engines=["uringpy", "asyncio", "asyncio-proto"],
+                    modes=["thread", "process"], workers=[1, 2, 4]),
+    "baselines": dict(engines=["asyncio", "asyncio-proto", "uvloop", "uvloop-proto"],
+                      modes=["thread", "process"], workers=[1, 4]),
     "app": dict(engines=["uringpy-app", "asyncio-app"], modes=["thread", "process"],
                 workers=[1, 2, 4]),
     "factorial": dict(engines=["uringpy", "c-epoll", "py-uring", "py-epoll"],
@@ -82,7 +86,8 @@ CSV_FIELDS = [
     "transfer_mb_s", "socket_errors", "non_2xx",
     "client_cpu_pct", "client_steal_pct", "server_cpu_pct", "server_steal_pct",
     "server_max_core_pct", "srv_requests", "srv_syscalls", "srv_enters",
-    "srv_completions", "srv_waits", "srv_handler_errors", "note",
+    "srv_completions", "srv_waits", "srv_handler_errors", "srv_python",
+    "srv_gil", "note",
 ]
 
 # Two-sided 95% Student-t critical values, index = degrees of freedom.
@@ -203,6 +208,14 @@ def parse_server_stats(log_text):
             except ValueError:
                 pass
     return totals
+
+
+def parse_runtime(log_text):
+    """'[runtime] python=3.14.0 gil_enabled=0' -> ('3.14.0', 'off'); ('', '') if absent."""
+    m = re.search(r"^\[runtime\] python=(\S+) gil_enabled=([01])", log_text, re.M)
+    if not m:
+        return "", ""
+    return m.group(1), ("on" if m.group(2) == "1" else "off")
 
 
 def parse_proc_stat(text):
@@ -406,6 +419,7 @@ def run_one(server, cell, args, url):
         if row["status"] == "no-start":
             lines = logs.strip().splitlines()
             row["note"] = lines[-1][:200] if lines else "server did not answer"
+    row["srv_python"], row["srv_gil"] = parse_runtime(logs)
     stats = parse_server_stats(logs)
     for key in ("requests", "syscalls", "enters", "completions", "waits", "handler_errors"):
         if key in stats:
@@ -467,9 +481,10 @@ def summarize(rows, meta=None):
     lines += ["Throughput is requests/second: mean of the repetitions, with the "
               "half-width of the 95% confidence interval (Student t). Scaling is the "
               "ratio to the 1-worker cell of the same engine and mode, with its 95% "
-              "half-width. CPU columns are whole-machine busy %, averaged over runs.", ""]
-    lines += ["| engine | mode | workers | body B | batch cap | n | req/s | ± 95% CI | CV % | scaling | p50 ms | p99 ms | server CPU % | busiest core % | client CPU % | syscalls/req | compl/enter | flags |",
-              "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |"]
+              "half-width. CPU columns are whole-machine busy %, averaged over runs. GIL is "
+              "the state the server process reported at start-up.", ""]
+    lines += ["| engine | mode | workers | GIL | body B | batch cap | n | req/s | ± 95% CI | CV % | scaling | p50 ms | p99 ms | server CPU % | busiest core % | client CPU % | syscalls/req | compl/enter | flags |",
+              "| --- | --- | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |"]
     for key in order:
         engine, mode, workers, resp_size, max_batch = key
         runs = groups[key]
@@ -505,11 +520,12 @@ def summarize(rows, meta=None):
             flags.append("socket errors or non-2xx responses")
         if any(_num(r, "srv_handler_errors") > 0 for r in good):
             flags.append("handler errors")
+        gil = "/".join(sorted({r.get("srv_gil") for r in good if r.get("srv_gil")})) or "-"
         if not good:
             notes = sorted({r.get("note", "") for r in runs if r.get("note")})
             flags.append("no successful run" + (": " + "; ".join(notes) if notes else ""))
         lines.append(
-            f"| {engine} | {mode} | {workers} | {resp_size} | {max_batch or 'none'} | {len(rps)} "
+            f"| {engine} | {mode} | {workers} | {gil} | {resp_size} | {max_batch or 'none'} | {len(rps)} "
             f"| {_f(m)} | {_f(hw)} | {_f(cv, 1)} | {scaling} "
             f"| {_f(_avg(good, 'lat_p50_ms'), 2)} | {_f(_avg(good, 'lat_p99_ms'), 2)} "
             f"| {_f(_avg(good, 'server_cpu_pct'), 1)} | {_f(_avg(good, 'server_max_core_pct'), 1)} "
@@ -618,7 +634,11 @@ def main(argv=None):
     rng = random.Random(seed)
     cells = build_cells(args)
     started = datetime.datetime.now(datetime.timezone.utc)
-    out_dir = os.path.join(args.out, f"{args.experiment}-{started.strftime('%Y%m%dT%H%M%SZ')}")
+    # The image tag goes into the folder name so runs on different interpreter
+    # builds cannot be confused with each other.
+    tag = "local" if args.local else re.sub(r"[^A-Za-z0-9.]+", "-", args.image.split("/")[-1])
+    out_dir = os.path.join(args.out,
+                           f"{args.experiment}-{tag}-{started.strftime('%Y%m%dT%H%M%SZ')}")
     os.makedirs(out_dir, exist_ok=True)
 
     meta = {"experiment": args.experiment, "started_utc": started.isoformat(timespec="seconds"),

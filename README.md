@@ -117,22 +117,28 @@ order and writes the raw runs, the machine and software details, and a summary
 with means and 95% confidence intervals to `benchmarks/results/`.
 
 ```bash
-# on the server VM: build the image
-docker build -t uringpy:gil .
+# on the server VM: build both interpreters from one recipe (they differ only
+# in --disable-gil); each build fails if the GIL is not in the requested state
+docker build -f Dockerfile.bench -t uringpy:314 .
+docker build -f Dockerfile.bench --build-arg FREE_THREADED=1 -t uringpy:314t .
 
 # on the client VM (needs python3 and wrk)
-export SERVER=user@10.0.0.2 SERVER_IP=10.0.0.2
-python3 benchmarks/bench_matrix.py --experiment scaling     # uringpy vs asyncio, thread vs process
+export SERVER=user@10.0.0.2 SERVER_IP=10.0.0.2 IMAGE=uringpy:314
+python3 benchmarks/bench_matrix.py --experiment scaling     # uringpy vs asyncio (streams and Protocol), thread vs process
 python3 benchmarks/bench_matrix.py --experiment app         # with a Python handler per request
+python3 benchmarks/bench_matrix.py --experiment baselines   # asyncio and uvloop, streams and Protocol API
 python3 benchmarks/bench_matrix.py --experiment factorial   # {io_uring, epoll} x {C loop, Python loop}
 python3 benchmarks/bench_matrix.py --experiment batch       # completions-per-enter cap, 1 .. unlimited
 python3 benchmarks/bench_matrix.py --experiment size        # response size, 64 B .. 1 MiB
 ```
 
 Defaults: 5 repetitions of 20 s after a 5 s warm-up, 400 connections; each
-experiment takes roughly 15 to 30 minutes. Add `--image uringpy:gil-ft` for the
-free-threaded build. The `loops` experiment (uvloop, uringcore, uringloop) needs
-the image from `benchmarks/crossruntime/Dockerfile.py313`. The summary flags
+experiment takes roughly 15 to 45 minutes. Use `--image uringpy:314t` for the
+free-threaded build (uvloop is left out of that image because it is not
+free-threading-ready). Every run records the Python version and the GIL state
+the server process reported, and the summary shows it. The `loops` experiment
+(uringcore, uringloop) needs the image from
+`benchmarks/crossruntime/Dockerfile.py313`. The summary flags
 cells where the client was above 85% CPU, since there the load generator, not
 the server, may be the limit.
 
