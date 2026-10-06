@@ -11,13 +11,22 @@ per-run data for each table is kept under `benchmarks/results/`.
 > GIL released, or in Python with it held) matters more than which system-call
 > interface is used.
 
-The criterion was fixed before the measurements were examined:
+The criterion below was written down on the day of the measurements, while the
+`factorial` runs were in progress; the commit that records it is later than
+those runs, so it is not a pre-registered test:
 
 - **Supported** if, in the `factorial` experiment, moving the loop from Python to
   C changes throughput far more than switching between `epoll` and `io_uring`,
   **and** in the `batch` experiment, capping the completions handled per
   `io_uring_enter` changes throughput little.
 - **Not supported** otherwise; the paper then reports what the data shows.
+
+Outcome: met in part. The first condition holds at four workers and fails at
+one; the second holds for caps of 16 and above. The claim as worded above is
+therefore not supported for a single worker. What the data supports is narrower
+(the interface and batching set one worker's speed; loop placement and GIL
+handling decide whether worker threads scale), and that narrower claim was
+formulated after seeing the results.
 
 ## Setup
 
@@ -50,11 +59,11 @@ client, with `SERVER`, `SERVER_IP` and `IMAGE` set (see the README).
 | Name | Question it answers | Engines | Modes | Workers | Swept |
 | --- | --- | --- | --- | --- | --- |
 | `scaling` | Does throughput grow with workers in one interpreter, and how does that compare with one process per worker? | uringpy, asyncio, asyncio-proto | thread, process | 1, 2, 4 | — |
-| `factorial` | Is the gain from the system-call interface or from where the loop runs? | uringpy, c-epoll, py-uring, py-epoll | thread | 1, 2, 4 | — |
+| `factorial` | Is the gain from the system-call interface or from where the loop runs? | uringpy, c-epoll, py-uring, py-epoll, and py-uring-held for comparison | thread | 1, 2, 4 | — |
 | `batch` | How much does batching completions per system call contribute? | uringpy | thread | 1 | batch cap 1, 4, 16, 64, 256, none |
-| `app` | What happens once every request runs Python code? | uringpy-app, asyncio-app | thread, process | 1, 2, 4 | — |
-| `handler` | How does thread scaling depend on how long each request holds the GIL? | uringpy-app | thread, process | 1, 2, 4 | handler work 0 … 3000 iterations |
-| `size` | Where does the advantage end as responses grow? | uringpy, asyncio | thread | 4 | body 64 B … 1 MiB |
+| `app` | What happens once every request runs Python code? | uringpy-app, uringpy-app-batch, asyncio-app, asyncio-proto-app, uvloop-proto-app | thread, process | 1, 2, 4 | — |
+| `handler` | How does thread scaling depend on how long each request holds the GIL, and on how often the GIL changes hands? | uringpy-app, uringpy-app-batch | thread, process | 1, 2, 4 | handler work 0 … 3000 iterations |
+| `size` | Where does the advantage end as responses grow? | uringpy, asyncio-proto | process | 4 | body 64 B … 1 MiB |
 | `baselines` | How do other event loops and the faster asyncio API compare? | asyncio, asyncio-proto, uvloop, uvloop-proto | thread, process | 1, 4 | — |
 
 The 2x2 design of `factorial`:
@@ -65,7 +74,14 @@ The 2x2 design of `factorial`:
 | `epoll` | `c-epoll` | `py-epoll` |
 
 All engines answer each `recv()` with the same bytes and none parses HTTP, so
-they differ only in how the I/O loop is built. Defaults: 5 repetitions of 20 s
+they differ only in how the I/O loop is built. One difference between the two
+Python loops is not the interface and has to be kept in mind: `py-epoll` makes
+its system calls through CPython's socket objects, which release the GIL around
+each call, and `py-uring` releases it while waiting for completions and while
+submitting. `py-uring-held` is `py-uring` keeping the GIL while it submits (the
+kernel performs the queued sends inside that call), which is how `py-uring`
+behaved in the runs of 2026-10-06 made at commit `b60fe24`. It is run next to
+the 2x2 to show what that choice alone does. Defaults: 5 repetitions of 20 s
 after a 5 s warm-up, 400 keep-alive connections, one `wrk` thread per client
 CPU. Repetitions are interleaved: every cell is run once in shuffled order, then
 every cell again, with a fresh server process for every run.
@@ -95,11 +111,53 @@ Columns of `runs.csv` that the formulas use:
 | `srv_syscalls`, `srv_enters`, `srv_completions` | server counters | system calls, `io_uring_enter` calls, completions |
 | `srv_cpu_ns` | server | user + system CPU time of the server processes |
 | `srv_handler_calls`, `srv_gil_hold_ns`, `srv_gil_wait_ns` | server counters | handler calls and time spent holding / waiting for the GIL |
+| `srv_gil_acquires` | server counters | GIL acquisitions made for handler calls: equal to the calls for `uringpy-app`, fewer for `uringpy-app-batch` |
 | `srv_python`, `srv_gil` | server | interpreter version and GIL state at start-up |
 
 Server counters cover the server's whole life, warm-up included. Ratios of two
 server counters are therefore consistent; they are never divided by wrk's
 request count.
+
+## Published results and tables
+
+The runs behind the reported numbers are kept in `benchmarks/results/`, one
+folder per experiment and interpreter (`...-314-...` is the GIL build,
+`...-314t-...` the free-threaded build). `benchmarks/make_tables.py` reads every
+such folder and writes the result tables:
+
+```bash
+python3 benchmarks/make_tables.py                    # LaTeX tables -> benchmarks/results/tables/
+python3 benchmarks/make_tables.py --out paper/tables # or wherever the manuscript reads them
+python3 benchmarks/make_tables.py --dump             # every configuration as text
+```
+
+It uses the statistics functions of `bench_matrix.py`, so a table and a
+`summary.md` cannot disagree, and each generated file starts with the folders,
+commit and image it was computed from. Folders of the same experiment are
+pooled, so a trial or an aborted run must not be left in `benchmarks/results/`.
+
+| Table | Experiment(s) | Shows |
+| --- | --- | --- |
+| `tab_factorial`, `tab_effects` | `factorial` | the 2x2 design, and each factor's effect with the other held fixed |
+| `tab_batch` | `batch` | throughput against the batch cap |
+| `tab_scaling` | `scaling` (both builds), `baselines` | throughput at 1 to 4 workers, scaling, busy cores |
+| `tab_app` | `app` (both builds) | the same with a Python handler per request |
+| `tab_size` | `size` | throughput and data rate against response size |
+
+How the published runs differ from the presets above:
+
+- `scaling` was run with `--workers "1 2 3 4"` (the preset is 1, 2, 4).
+- `baselines` was run with `--engines "uvloop uvloop-proto"`, because the two
+  `asyncio` engines were already in `scaling`.
+- The runs of 2026-10-06 up to and including `size` were made at commit
+  `b60fe24`, before the `handler_work`, `srv_cpu_ns`, `srv_handler_calls`,
+  `srv_gil_hold_ns` and `srv_gil_wait_ns` columns existed, so their `runs.csv`
+  files do not have them. Each `meta.json` records the commit and image used.
+
+Comparisons inside one experiment are interleaved. Comparisons across two
+experiments are not: one `uringpy` worker measured 140.7, 146.1 and 144.0
+thousand requests per second in three experiments, a spread of 4%. Comparisons
+between the GIL build and the free-threaded build are also across experiments.
 
 ## Formulas
 
@@ -126,6 +184,13 @@ CPU use between two `/proc/stat` samples, with `busy = total - idle - iowait`:
 - **Throughput per busy core**: `m / C`. This is reported next to `S` because a
   1-worker run on a multi-core server also uses other cores for kernel network
   work, which makes `S` alone understate per-core scaling.
+- **Per-core efficiency at `N` workers** (in `make_tables.py`):
+  `E_N = (m_N / C_N) / (m_1 / C_1)`, so that `S = E_N * C_N / C_1`. `E_N < 1`
+  in process mode, where no lock is shared, is a property of the machine.
+
+Any other ratio of two cells (for example `io_uring` over `epoll`, or threads
+over processes) is computed as `m_a / m_b` with the same half-width formula as
+`S`.
 
 Per-request costs, from the server's own counters summed over a cell's runs:
 
@@ -134,6 +199,7 @@ Per-request costs, from the server's own counters summed over a cell's runs:
 - **Process CPU per request**: `srv_cpu_ns / srv_requests`
 - **GIL hold per request**: `t_p = srv_gil_hold_ns / srv_handler_calls`
 - **GIL wait per request**: `w = srv_gil_wait_ns / srv_handler_calls`
+- **GIL acquisitions per request**: `srv_gil_acquires / srv_handler_calls`
 
 GIL bound on thread scaling. Take a request to cost `t_c` of CPU with the GIL
 released and `t_p` with it held, both measured at one worker (`t_c` = process
@@ -147,8 +213,17 @@ only one `t_p` part at a time, so
 - **Bound**: `S(N) <= min(N, 1 / f)`
 
 `f = 0` (no Python on the hot path) gives `S(N) <= N`; `f = 1` (everything under
-the GIL) gives `S(N) <= 1`. Measured scaling below the bound is the cost of
-handing the GIL between threads, which the measured wait `w` shows directly. In
+the GIL) gives `S(N) <= 1`. In `make_tables.py`, `f = t_p * m_1`, with `t_p`
+measured at one worker and `m_1` the one-worker throughput (a saturated worker
+serves `1 / (t_c + t_p)` requests per second).
+
+The bound is an upper bound and can be far from tight. With the default handler
+it is about 7 while measured thread scaling stops at 1.57: what it leaves out is
+the cost of acquiring a contended lock once per request, which the measured
+wait `w` shows directly. `uringpy-app-batch` (`URingEngine.set_gil_batching`)
+tests that reading: it takes the GIL once for all requests found in one pass
+over the completion queue, which leaves `f` unchanged and cuts the number of
+acquisitions per request. In
 process mode each worker has its own GIL, so the bound is `N` whatever `f` is.
 
 ## Pitfalls and how each is handled
@@ -184,3 +259,14 @@ What is not handled is listed under Limits and stated in the paper.
   fragmented requests. `py-uring` and `py-epoll` send each response with one
   `send`, so they are used only with small responses.
 - One protocol, one kernel, one machine family, and a server with few cores.
+- The server's four cores are shared by the workers and the kernel's network
+  stack: one worker already keeps about 1.2 cores busy, so scaling at four
+  workers is about 2.3 to 2.7 for every engine that scales at all.
+- With response bodies of 16 KiB or more the network path (about 15.7 Gbit/s
+  between the two machines) was the limit, not the server; those `size` cells
+  measure the network.
+- `py-uring` and `py-epoll` are bare dispatch loops without `asyncio`'s task and
+  transport machinery, so the loop-placement effect they show at one worker is a
+  lower bound for a full event loop.
+- Repetitions are interleaved within an experiment, not across experiments (see
+  "Published results and tables").

@@ -6,35 +6,52 @@
 
 A **GIL-aware `io_uring` runtime for CPython**: it reaps completions and drives
 the entire accept/recv/send protocol inside a single `nogil` C region, so that
-worker threads scale across cores **within one interpreter** — where
-`asyncio`-family event loops collapse under GIL contention.
+worker threads scale across cores **within one interpreter** on a standard
+(GIL) build, where `asyncio` and `uvloop` threads lose throughput.
 
-> **Core finding.** Once `io_uring` amortizes system calls (we measure up to
-> ~385 completions per `io_uring_enter`), the residual bottleneck for a Python
-> async server is *interpreter execution on the hot path* (the GIL), **not** the
-> system-call count. Keeping the completion hot path in C removes it.
+> **Core finding.** The system-call interface and the placement of the event
+> loop are separate levers. `io_uring` and its batching set how fast *one*
+> worker is (1.16-1.26x over `epoll`; batching is worth about 20%, all of it by
+> 16 completions per call). Whether *more worker threads* add throughput is
+> decided by whether the loop holds the GIL, on either interface.
 
-## Headline results (isolated two-node, cloud VMs, idle 100% / steal 0%)
+## Headline results
 
-HTTP keep-alive echo, stock (GIL) CPython, scaling vs. worker count:
+Two Google Cloud VMs (4-core server, 8-core client, one vCPU per physical
+core), CPython 3.14.7, 13-byte response, 5 interleaved repetitions per
+configuration. Thousands of requests per second, mean ± 95% confidence
+half-width; scaling is four workers over one.
 
-| Engine / model       | 1w   | 4w (scaling)             |
-| -------------------- | ---- | ------------------------ |
-| **uringpy / thread** | 147k | **269k (1.83×)**         |
-| asyncio / thread     | 44k  | 18k (**0.47× collapse**) |
-| asyncio / process    | 44k  | 70k (1.58×)              |
+| Engine | Workers as | 1 worker | 4 workers | Scaling |
+| --- | --- | ---: | ---: | ---: |
+| **uringpy** | **threads** | 140.7 ± 3.0 | **328.4 ± 0.8** | **2.33×** |
+| uringpy | processes | 144.4 ± 3.8 | 328.9 ± 1.2 | 2.28× |
+| asyncio (Protocol API) | threads | 93.6 ± 1.6 | 45.0 ± 0.9 | 0.48× |
+| asyncio (Protocol API) | processes | 94.3 ± 1.6 | 235.3 ± 1.7 | 2.50× |
+| uvloop (Protocol API) | threads | 98.0 ± 2.3 | 35.0 ± 0.2 | 0.36× |
+| uvloop (Protocol API) | processes | 96.5 ± 1.8 | 247.0 ± 0.6 | 2.56× |
 
-- uringpy is **~3.3× faster at a single worker** and is the *only* configuration
-  that scales across cores **in one interpreter**.
-- On **free-threaded** CPython (no GIL), `asyncio` thread-scaling recovers, yet
-  uringpy is unchanged and still **~3.8× faster** absolute — because it never
-  runs the interpreter on the hot path. The technique is durable across the
-  GIL / free-threading transition.
-- **Boundary (honest):** with real per-request Python work, single-interpreter
-  thread scaling is lost for uringpy too (use process mode), though it degrades
-  *gracefully* where `asyncio` *collapses*, and stays ~2.4× faster.
+- **Threads that scale under the GIL.** uringpy's worker threads deliver what
+  its worker processes deliver, and 1.33× the best process-per-worker baseline.
+  The server has four cores and one worker already uses 1.2 of them (kernel
+  network processing), which is why scaling is 2.3× and not 4×; the baselines'
+  processes are limited the same way.
+- **It is the loop placement, not the interface, that scales.** In a 2×2
+  experiment, both C loops scale at four threads (`io_uring` 2.24×, `epoll`
+  2.34×) and both Python loops do not (0.96×, 0.64×).
+- **Limits, measured.**
+  - On the **free-threaded** build `asyncio` threads scale again (2.50-2.64×);
+    uringpy is unchanged and keeps a constant 1.5-2.0× advantage.
+  - With a **Python handler on every request**, uringpy's thread scaling under
+    the GIL stops at 1.57× (processes: 2.36×; free-threaded threads: 2.31×).
+  - With responses of **16 KiB or more** the network, not the server, was the
+    limit.
 
-A manuscript describing the full methodology and measurements is in preparation.
+The raw runs are in [`benchmarks/results/`](benchmarks/results/), and
+`python3 benchmarks/make_tables.py` regenerates every result table from them.
+What each experiment tests and how every number is computed is in
+[`benchmarks/EXPERIMENTS.md`](benchmarks/EXPERIMENTS.md). A manuscript
+describing the methodology and measurements is in preparation.
 
 ## Architecture
 
@@ -102,6 +119,25 @@ engine.set_response(RESPONSE)
 engine.serve_forever_echo(lst.fileno())  # runs the accept/recv/send loop in C (GIL released)
 ```
 
+To run Python for each request, pass a handler instead of a fixed response.
+Accept, receive and send still run in C with the GIL released; the GIL is held
+only for the handler:
+
+```python
+def handler(request: bytes) -> bytes:
+    return RESPONSE
+
+engine = URingEngine(entries=8192, slot_size=4096, total_slots=32768)
+engine.set_gil_batching(True)   # optional: take the GIL once per batch of requests
+engine.serve_forever_app(lst.fileno(), handler)
+```
+
+Without `set_gil_batching(True)` the GIL is taken once per request. With it,
+the requests found in one pass over the completion queue are handled under a
+single acquisition. It is meant for several worker threads running short
+handlers; whether and how much it helps is measured by the `uringpy-app-batch`
+engine of the benchmarks.
+
 > Note: `io_uring` requires Linux; under Docker, add `--security-opt seccomp=unconfined`.
 
 ## Reproduce the benchmarks
@@ -124,18 +160,19 @@ docker build -f Dockerfile.bench --build-arg FREE_THREADED=1 -t uringpy:314t .
 # on the client VM (needs python3 and wrk)
 export SERVER=user@10.0.0.2 SERVER_IP=10.0.0.2 IMAGE=uringpy:314
 python3 benchmarks/bench_matrix.py --experiment scaling     # uringpy vs asyncio (streams and Protocol), thread vs process
-python3 benchmarks/bench_matrix.py --experiment app         # with a Python handler per request
+python3 benchmarks/bench_matrix.py --experiment app         # with a Python handler per request (uringpy, asyncio streams/Protocol, uvloop)
 python3 benchmarks/bench_matrix.py --experiment baselines   # asyncio and uvloop, streams and Protocol API
 python3 benchmarks/bench_matrix.py --experiment factorial   # {io_uring, epoll} x {C loop, Python loop}
 python3 benchmarks/bench_matrix.py --experiment batch       # completions-per-enter cap, 1 .. unlimited
-python3 benchmarks/bench_matrix.py --experiment size        # response size, 64 B .. 1 MiB
+python3 benchmarks/bench_matrix.py --experiment size        # response size, 64 B .. 1 MiB, one process per worker
 python3 benchmarks/bench_matrix.py --experiment handler     # per-request Python work, none .. heavy
 ```
 
 Defaults: 5 repetitions of 20 s after a 5 s warm-up, 400 connections; each
-experiment takes roughly 15 to 45 minutes. Use `--image uringpy:314t` for the
+experiment takes roughly 15 to 55 minutes. Use `--image uringpy:314t` for the
 free-threaded build (uvloop is left out of that image because it is not
-free-threading-ready). Every run records the Python version and the GIL state
+free-threading-ready). For the `app` experiment on that image pass
+`--engines "uringpy-app asyncio-app asyncio-proto-app"`. Every run records the Python version and the GIL state
 the server process reported, and the summary shows it. The `loops` experiment
 (uringcore, uringloop) needs the image from
 `benchmarks/crossruntime/Dockerfile.py313`. The summary flags
@@ -147,6 +184,11 @@ The `handler` experiment varies how much interpreted work each request does
 also reports how long a request waits for the GIL and how long it holds it.
 Those two numbers are what a GIL-contention model needs as inputs, measured
 instead of assumed.
+
+`python3 benchmarks/make_tables.py` turns everything under
+`benchmarks/results/` into the result tables (LaTeX), and
+`python3 benchmarks/make_tables.py --dump` prints every configuration's
+statistics as text.
 
 `python3 benchmarks/bench_matrix.py --experiment scaling --local` runs
 everything on one machine as a smoke test; do not report those numbers.
@@ -195,8 +237,9 @@ SERVER=user@host SERVER_IP=10.0.0.2 bash benchmarks/bodysize_bench.sh
 
 ## Limitations
 
-- Evaluated on one protocol, kernel, and CPU; tiny-response throughput is
-  network/packet-rate bound (~270–290k req/s per VM).
+- Evaluated on one protocol, one kernel and one machine family, with a 4-core
+  server whose cores are shared by the workers and the kernel's network stack
+  (one worker already keeps about 1.2 cores busy).
 - The multicore thread-scaling benefit applies to I/O-framing-dominated
   services; per-request Python logic requires process-level parallelism.
 - Not a drop-in `asyncio` replacement — it is a specialized reactor.

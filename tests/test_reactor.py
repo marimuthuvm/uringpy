@@ -31,7 +31,7 @@ class Server:
     """Runs one engine in a thread; stop() wakes it with a throwaway connect."""
 
     def __init__(self, response=None, handler=None, sndbuf=None, kind="uring",
-                 max_batch=0, gil_timing=False):
+                 max_batch=0, gil_timing=False, gil_batch=False):
         if kind == "epoll":
             self.engine = EpollEngine()
         else:
@@ -43,6 +43,8 @@ class Server:
                 self.engine.set_max_batch(max_batch)
             if gil_timing:
                 self.engine.set_gil_timing(True)
+            if gil_batch:
+                self.engine.set_gil_batching(True)
         self.listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         if sndbuf:  # inherited by accepted sockets
@@ -89,6 +91,18 @@ class Server:
         self.stop()
 
 
+def settled_stats(engine, requests, timeout=2.0):
+    """Counters once the reactor has counted `requests` responses. A client can
+    read a response before the server has processed that send's completion, so
+    reading the counters straight after the last recv would be a race."""
+    deadline = time.time() + timeout
+    while True:
+        stats = engine.get_stats()
+        if stats["requests"] >= requests or time.time() > deadline:
+            return stats
+        time.sleep(0.005)
+
+
 def recv_exact(sock, n):
     chunks, got = [], 0
     while got < n:
@@ -112,7 +126,7 @@ def test_echo_keepalive_and_many_connections(kind):
                 assert recv_exact(c, len(resp)) == resp
         for c in conns:
             c.close()
-        stats = srv.engine.get_stats()
+        stats = settled_stats(srv.engine, 40)
     assert stats["requests"] == 40
     assert stats["syscalls"] > 0 and stats["syscalls_per_request"] > 0
 
@@ -140,7 +154,7 @@ def test_epoll_short_sends_are_resumed():
             time.sleep(0.3)
             assert recv_exact(c, len(resp)) == resp
         c.close()
-        stats = srv.engine.get_stats()
+        stats = settled_stats(srv.engine, 2)
     assert stats["requests"] == 2
     # 2 recv + 2 send would be 4 I/O calls; many more means sends were split.
     assert stats["syscalls"] > 20
@@ -161,7 +175,7 @@ def _burst(srv, n_conn=16, rounds=20):
 def test_one_enter_per_wait_and_exact_counters():
     with Server(response=_response(b"Hello, world!")) as srv:
         _burst(srv)
-        st = srv.engine.get_stats()
+        st = settled_stats(srv.engine, 16 * 20)
     assert st["requests"] == 16 * 20
     # The loop makes exactly one io_uring_enter per iteration; a blocked wait
     # that has not returned yet accounts for the possible difference of one.
@@ -173,7 +187,7 @@ def test_one_enter_per_wait_and_exact_counters():
 def test_max_batch_caps_completions_per_enter():
     with Server(response=_response(b"Hello, world!"), max_batch=1) as srv:
         _burst(srv)
-        capped = srv.engine.get_stats()
+        capped = settled_stats(srv.engine, 16 * 20)
     assert capped["requests"] == 16 * 20
     # With a cap of 1, no io_uring_enter may yield more than one completion.
     assert capped["completions"] <= capped["enters"]
@@ -342,3 +356,132 @@ def test_app_rejects_non_callable():
         pytest.skip(f"io_uring unavailable: {e}")
     with pytest.raises(TypeError):
         engine.serve_forever_app(0, "not callable")
+
+
+@pytest.mark.parametrize("release_gil", [True, False])
+def test_python_loop_flush_with_and_without_gil(release_gil):
+    # The Python-level API (submit_* / flush / get_events), as the py-uring
+    # benchmark engine uses it. flush() releases the GIL around the submit
+    # system call by default and keeps it when asked; both must serve correctly.
+    try:
+        engine = URingEngine(entries=64, slot_size=4096, total_slots=64)
+    except OSError as e:
+        pytest.skip(f"io_uring unavailable: {e}")
+    ACCEPT, RECV, SEND = 1, 2, 3
+    resp = _response(b"Hello, world!")
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(8)
+    port = listener.getsockname()[1]
+    stop = threading.Event()
+    served = []
+
+    def loop():
+        engine.submit_accept(listener.fileno())
+        assert engine.flush(release_gil) >= 1
+        while not stop.is_set():
+            for op, fd, res, _data in engine.get_events(max_events=64, wait=True,
+                                                         copy_data=False):
+                if op == ACCEPT:
+                    engine.submit_accept(listener.fileno())
+                    if res >= 0:
+                        engine.submit_recv(res)
+                elif op == RECV:
+                    if res <= 0:
+                        os.close(fd)
+                    else:
+                        served.append(fd)  # counted here: the client cannot
+                        engine.submit_send(fd, resp)  # see a reply before this
+                elif op == SEND:
+                    engine.submit_recv(fd)
+            engine.flush(release_gil)
+
+    t = threading.Thread(target=loop, daemon=True)
+    t.start()
+    c = socket.create_connection(("127.0.0.1", port), timeout=5)
+    c.settimeout(5)
+    for _ in range(3):
+        c.sendall(REQUEST)
+        assert recv_exact(c, len(resp)) == resp
+    stop.set()
+    c.close()  # the close completes a recv, which lets the loop see the flag
+    t.join(timeout=5)
+    assert not t.is_alive()
+    listener.close()
+    assert len(served) == 3
+
+
+@pytest.mark.parametrize("gil_batch", [False, True])
+def test_gil_batching_same_responses_fewer_acquisitions(gil_batch):
+    # With batching the GIL is taken once for all requests found in one pass
+    # over the completion queue; the responses must be exactly the same.
+    def handler(data):
+        path = data.split(b" ")[1]
+        if path.startswith(b"/c0-"):
+            time.sleep(0.03)  # stalls the reactor so the other requests pile up
+        return _response(b"path=" + path)
+
+    with Server(handler=handler, gil_batch=gil_batch) as srv:
+        conns = [srv.connect() for _ in range(24)]
+        for rnd in range(3):
+            for i, c in enumerate(conns):
+                c.sendall(b"GET /c%d-r%d HTTP/1.1\r\n\r\n" % (i, rnd))
+            for i, c in enumerate(conns):
+                want = _response(b"path=/c%d-r%d" % (i, rnd))
+                assert recv_exact(c, len(want)) == want
+        for c in conns:
+            c.close()
+        st = settled_stats(srv.engine, 72)
+    assert st["handler_calls"] == 72 and st["handler_errors"] == 0
+    assert st["requests"] == 72
+    if gil_batch:
+        assert st["gil_acquires"] <= st["handler_calls"] // 2
+    else:
+        assert st["gil_acquires"] == st["handler_calls"]
+
+
+def test_gil_batching_error_closes_only_that_connection(capfd):
+    def handler(data):
+        if b"/slow" in data:
+            time.sleep(0.05)  # the next two requests arrive during this call
+        if b"/boom" in data:
+            raise RuntimeError("boom")
+        return _response(b"ok")
+
+    want = _response(b"ok")
+    with Server(handler=handler, gil_batch=True) as srv:
+        slow, bad, good = srv.connect(), srv.connect(), srv.connect()
+        slow.sendall(b"GET /slow HTTP/1.1\r\n\r\n")
+        time.sleep(0.01)
+        bad.sendall(b"GET /boom HTTP/1.1\r\n\r\n")
+        good.sendall(REQUEST)
+        assert recv_exact(slow, len(want)) == want
+        assert bad.recv(1) == b""  # closed by the server
+        assert recv_exact(good, len(want)) == want
+        good.sendall(REQUEST)  # and still usable
+        assert recv_exact(good, len(want)) == want
+        for c in (slow, bad, good):
+            c.close()
+        st = srv.engine.get_stats()
+    assert st["handler_errors"] == 1 and st["handler_calls"] == 4
+    assert "RuntimeError: boom" in capfd.readouterr().err
+
+
+def test_gil_batching_timing_and_guards():
+    def handler(data):
+        time.sleep(0.002)
+        return _response(b"ok")
+
+    want = _response(b"ok")
+    with Server(handler=handler, gil_timing=True, gil_batch=True) as srv:
+        with pytest.raises(RuntimeError):
+            srv.engine.set_gil_batching(False)  # not while serving
+        c = srv.connect()
+        for _ in range(5):
+            c.sendall(REQUEST)
+            assert recv_exact(c, len(want)) == want
+        c.close()
+        st = srv.engine.get_stats()
+    assert st["handler_calls"] == 5
+    assert 5 * 2_000_000 <= st["gil_hold_ns"] < 5 * 200_000_000
+    assert st["gil_wait_ns"] < st["gil_hold_ns"]

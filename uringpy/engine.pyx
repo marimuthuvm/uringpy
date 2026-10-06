@@ -20,6 +20,9 @@ from cpython.buffer cimport PyObject_GetBuffer, PyBuffer_Release, PyBUF_SIMPLE
 # 24 bits of user_data, so a response must be shorter than 16 MiB.
 cdef enum:
     MAX_RESPONSE_LEN = 0xFFFFFF
+    # Requests collected before the GIL is taken once for all of them
+    # (set_gil_batching). A fuller batch is handled in several acquisitions.
+    PEND_CAP = 1024
 
 
 cdef class SlabView:
@@ -234,6 +237,15 @@ cdef class URingEngine:
     cdef bint _gil_timing
     cdef unsigned long long stat_gil_hold_ns
     cdef unsigned long long stat_gil_wait_ns
+    # GIL batching (serve_forever_app): requests waiting for the next GIL
+    # acquisition, as parallel arrays of fd, slab slot and length. After the
+    # handlers have run, _pend_res holds each one's result (0 or -1).
+    cdef bint _gil_batch
+    cdef int *_pend_fd
+    cdef int *_pend_slot
+    cdef int *_pend_res
+    cdef int _pend_n
+    cdef unsigned long long stat_gil_acquires
     def __cinit__(self, unsigned int entries=1024, size_t slot_size=4096, size_t total_slots=1024):
         cdef int ret = io_uring_queue_init(entries, &self.ring, 0)
         if ret < 0:
@@ -268,6 +280,12 @@ cdef class URingEngine:
         self._gil_timing = False
         self.stat_gil_hold_ns = 0
         self.stat_gil_wait_ns = 0
+        self._gil_batch = False
+        self._pend_fd = NULL
+        self._pend_slot = NULL
+        self._pend_res = NULL
+        self._pend_n = 0
+        self.stat_gil_acquires = 0
         self.initialized = True
 
     def __dealloc__(self):
@@ -281,6 +299,12 @@ cdef class URingEngine:
             free(self._conn_cap)
         if self._conn_len != NULL:
             free(self._conn_len)
+        if self._pend_fd != NULL:
+            free(self._pend_fd)
+        if self._pend_slot != NULL:
+            free(self._pend_slot)
+        if self._pend_res != NULL:
+            free(self._pend_res)
         if self.initialized:
             if self.buf_ring != NULL and self.buf_count > 0:
                 io_uring_free_buf_ring(&self.ring, self.buf_ring, self.buf_count, self.buf_gid)
@@ -496,8 +520,18 @@ cdef class URingEngine:
         sqe.user_data = (<uint64_t>3 << 56) | ((<uint64_t>(<uint32_t>fd)) << 24) \
             | (<uint64_t>(slot_idx & 0xFFFFFF))
 
-    def flush(self):
-        cdef int ret = io_uring_submit(&self.ring)
+    def flush(self, bint release_gil=True):
+        # Submit the queued operations with one io_uring_enter. The kernel can
+        # perform them (a send, for instance) inside this call, so the GIL is
+        # released around it. release_gil=False keeps the GIL, which is how
+        # this method behaved up to 0.1.x; it exists so that the difference
+        # can be measured.
+        cdef int ret
+        if release_gil:
+            with nogil:
+                ret = io_uring_submit(&self.ring)
+        else:
+            ret = io_uring_submit(&self.ring)
         if ret < 0:
             raise OSError(-ret, "io_uring_submit failed")
         self.stat_submits += 1
@@ -532,7 +566,8 @@ cdef class URingEngine:
                 "handler_calls": self.stat_handler_calls,
                 "handler_errors": self.stat_handler_errors,
                 "gil_hold_ns": self.stat_gil_hold_ns,
-                "gil_wait_ns": self.stat_gil_wait_ns}
+                "gil_wait_ns": self.stat_gil_wait_ns,
+                "gil_acquires": self.stat_gil_acquires}
 
     def set_gil_timing(self, bint enabled):
         # serve_forever_app only. When enabled, every request records how long
@@ -543,6 +578,24 @@ cdef class URingEngine:
         if self._serving:
             raise RuntimeError("set_gil_timing() cannot be called while serving")
         self._gil_timing = enabled
+
+    def set_gil_batching(self, bint enabled):
+        # serve_forever_app only. Off (the default): the GIL is taken once per
+        # request, around that request's handler call. On: the requests found
+        # in one pass over the completion queue are collected, and the GIL is
+        # taken once for all of them. The handler sees the same calls in the
+        # same order; what changes is how often the lock changes hands, which
+        # is what limits worker threads when handlers are short. The price is
+        # that a response is not queued until the whole batch has been handled.
+        if self._serving:
+            raise RuntimeError("set_gil_batching() cannot be called while serving")
+        if enabled and self._pend_fd == NULL:
+            self._pend_fd = <int*>malloc(PEND_CAP * sizeof(int))
+            self._pend_slot = <int*>malloc(PEND_CAP * sizeof(int))
+            self._pend_res = <int*>malloc(PEND_CAP * sizeof(int))
+            if self._pend_fd == NULL or self._pend_slot == NULL or self._pend_res == NULL:
+                raise MemoryError("Failed to allocate the request batch")
+        self._gil_batch = enabled
 
     def set_max_batch(self, unsigned int n):
         # Ablation knob for the C reactors: process at most `n` completions per
@@ -640,6 +693,7 @@ cdef class URingEngine:
         # is off.
         cdef unsigned long long t_in
         cdef int rc
+        self.stat_gil_acquires += 1
         if t_req == 0:
             return self._handle_locked(handler, fd, req, n)
         t_in = _now_ns()
@@ -647,6 +701,52 @@ cdef class URingEngine:
         rc = self._handle_locked(handler, fd, req, n)
         self.stat_gil_hold_ns += _now_ns() - t_in
         return rc
+
+    cdef int _run_batch(self, PyObject *handler, int count,
+                        unsigned long long t_req) noexcept with gil:
+        # GIL-batching counterpart of _run_handler: one acquisition for `count`
+        # pending requests. Each request's result replaces its length in
+        # _pend_res. The wait is recorded once and the hold covers the batch,
+        # so both remain comparable per handler call.
+        cdef int i
+        cdef unsigned long long t_in = 0
+        cdef const char *mem = <const char*>self.pool.raw_memory
+        cdef size_t slot_size = self.pool.slot_size
+        self.stat_gil_acquires += 1
+        if t_req != 0:
+            t_in = _now_ns()
+            self.stat_gil_wait_ns += t_in - t_req
+        for i in range(count):
+            self._pend_res[i] = self._handle_locked(
+                handler, self._pend_fd[i],
+                mem + <size_t>self._pend_slot[i] * slot_size, self._pend_res[i])
+        if t_req != 0:
+            self.stat_gil_hold_ns += _now_ns() - t_in
+        return 0
+
+    cdef void _flush_pending(self, PyObject *handler, bint timing,
+                             unsigned long long *enters) noexcept nogil:
+        # Run the handlers of the collected requests under one GIL acquisition,
+        # then, with the GIL released again, free their receive buffers and
+        # queue the sends.
+        cdef int i, fd
+        cdef int count = self._pend_n
+        cdef unsigned long long t_req = 0
+        if count == 0:
+            return
+        if timing:
+            t_req = _now_ns()
+        self._run_batch(handler, count, t_req)
+        for i in range(count):
+            fd = self._pend_fd[i]
+            slab_free(self.pool, <int32_t>self._pend_slot[i])
+            if self._pend_res[i] < 0:
+                close(fd)
+                self.stat_closes += 1
+            else:
+                _arm_send(&self.ring, fd, self._conn_buf[fd],
+                          self._conn_len[fd], 0, enters)
+        self._pend_n = 0
 
     cdef int _handle_locked(self, PyObject *handler, int fd,
                             const char *req, int n) noexcept:
@@ -710,6 +810,7 @@ cdef class URingEngine:
         cdef unsigned long long t_req
         cdef const char *base
         cdef bint app = handler != NULL
+        cdef bint gil_batch = app and self._gil_batch
         cdef const char *resp = self._echo_resp
         cdef size_t resp_len = self._echo_resp_len
         cdef size_t slot_size = self.pool.slot_size
@@ -754,6 +855,14 @@ cdef class URingEngine:
                         slab_free(self.pool, <int32_t>low)
                         close(fd)
                         self.stat_closes += 1
+                    elif gil_batch:
+                        # Defer: the handler runs with the rest of this batch.
+                        self._pend_fd[self._pend_n] = fd
+                        self._pend_slot[self._pend_n] = <int>low
+                        self._pend_res[self._pend_n] = res
+                        self._pend_n += 1
+                        if self._pend_n == PEND_CAP:
+                            self._flush_pending(handler, timing, enters)
                     elif app:
                         t_req = 0
                         if timing:
@@ -789,6 +898,8 @@ cdef class URingEngine:
                         else:             # done: re-arm keep-alive recv
                             self.stat_requests += 1
                             _arm_recv(&self.ring, self.pool, fd, enters)
+            if gil_batch:
+                self._flush_pending(handler, timing, enters)
         return 0
 
     cdef _run(self, int listen_fd, PyObject *handler):
@@ -823,7 +934,8 @@ cdef class URingEngine:
 
     def serve_forever_app(self, int listen_fd, handler):
         # Serve handler(request_bytes) -> response_bytes. Accept/recv/send run
-        # in C with the GIL released; only the handler call itself holds it.
+        # in C with the GIL released; only the handler call itself holds it
+        # (once per request, or once per batch after set_gil_batching(True)).
         if not callable(handler):
             raise TypeError("handler must be callable")
         # `handler` is kept alive by this frame for the whole serve call.

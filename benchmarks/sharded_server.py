@@ -20,7 +20,12 @@ Engines (--engine):
     c-epoll   EpollEngine.serve_forever_echo(): the same C loop on epoll, one
               recv() and one send() system call per request.
     py-uring  URingEngine.get_events(): io_uring batching, but every
-              completion is dispatched by Python bytecode.
+              completion is dispatched by Python bytecode. The GIL is released
+              while waiting and while submitting.
+    py-uring-held  the same loop holding the GIL while it submits (the kernel
+              does the queued sends inside that call). Not a fifth cell of the
+              design: it shows how much of py-uring's behaviour depends on
+              where the GIL is held, as opposed to what is interpreted.
     py-epoll  select.epoll with a minimal Python loop.
     (py-uring and py-epoll send each response with a single send, so they are
     for small responses only.)
@@ -39,7 +44,11 @@ Engines (--engine):
   (app_workload.handle_request).
     uringpy-app  URingEngine.serve_forever_app(): transport in C, GIL taken
                  only for the handler call.
+    uringpy-app-batch  the same, with the GIL taken once for all requests
+                 found in one pass over the completion queue.
     asyncio-app  handler called inside the asyncio stream handler.
+    asyncio-proto-app, uvloop-proto-app  handler called from data_received of
+                 the Protocol API, the faster way to use either loop.
 
 Modes (--mode):
   thread    all workers in ONE process/interpreter (shared GIL).
@@ -142,8 +151,10 @@ def make_reuseport_listener(host, port, backlog=1024):
 
 # --- C reactors ---------------------------------------------------------------
 
-def uringpy_worker(host, port, wid, app=False):
-    """io_uring, loop in C. app=True calls the shared Python handler per request."""
+def uringpy_worker(host, port, wid, app=False, gil_batch=False):
+    """io_uring, loop in C. app=True calls the shared Python handler per request;
+    gil_batch=True takes the GIL once per batch of requests instead of once per
+    request."""
     from uringpy import URingEngine
 
     listener = make_reuseport_listener(host, port)
@@ -154,6 +165,8 @@ def uringpy_worker(host, port, wid, app=False):
         from app_workload import handle_request
         if GIL_TIMING:
             engine.set_gil_timing(True)
+        if gil_batch:
+            engine.set_gil_batching(True)
     else:
         engine.set_response(HTTP_RESPONSE)
     _STAT_SOURCES.append((wid, engine.get_stats))
@@ -178,7 +191,7 @@ def c_epoll_worker(host, port, wid):
 
 # --- Python-dispatch loops ----------------------------------------------------
 
-def py_uring_worker(host, port, wid):
+def py_uring_worker(host, port, wid, release_gil=True):
     """io_uring, loop in Python: completions are batched by the kernel but each
     one is dispatched by interpreted code."""
     from uringpy import URingEngine
@@ -207,7 +220,7 @@ def py_uring_worker(host, port, wid):
     _install_term_handler()
 
     engine.submit_accept(lfd)
-    engine.flush()
+    engine.flush(release_gil)
     resp = HTTP_RESPONSE
     while True:
         try:
@@ -230,7 +243,7 @@ def py_uring_worker(host, port, wid):
                 else:
                     counters["requests"] += 1
                     engine.submit_recv(fd)
-        engine.flush()
+        engine.flush(release_gil)
 
 
 def py_epoll_worker(host, port, wid):
@@ -358,21 +371,36 @@ def _run_loop(loop, server):
         loop.close()
 
 
-def asyncio_proto_worker(host, port, wid, loop_name="asyncio"):
-    """One event-loop worker using the Protocol API: the canned response is
-    written straight from data_received, with no streams layer in between."""
+def asyncio_proto_worker(host, port, wid, loop_name="asyncio", app=False):
+    """One event-loop worker using the Protocol API: the response is written
+    straight from data_received, with no streams layer in between.
+
+    app=True answers each request with the shared Python handler instead of the
+    canned response -- the same handler uringpy-app calls.
+    """
     import asyncio
 
     resp = HTTP_RESPONSE
+    if app:
+        from app_workload import handle_request
 
-    class Echo(asyncio.Protocol):
-        __slots__ = ("transport",)
+        class Echo(asyncio.Protocol):
+            __slots__ = ("transport",)
 
-        def connection_made(self, transport):
-            self.transport = transport
+            def connection_made(self, transport):
+                self.transport = transport
 
-        def data_received(self, data):
-            self.transport.write(resp)
+            def data_received(self, data):
+                self.transport.write(handle_request(data))
+    else:
+        class Echo(asyncio.Protocol):
+            __slots__ = ("transport",)
+
+            def connection_made(self, transport):
+                self.transport = transport
+
+            def data_received(self, data):
+                self.transport.write(resp)
 
     listener = make_reuseport_listener(host, port)
     loop = _new_loop(loop_name)
@@ -381,12 +409,12 @@ def asyncio_proto_worker(host, port, wid, loop_name="asyncio"):
     _run_loop(loop, server)
 
 
-def _loop_worker(loop_name, proto=False):
+def _loop_worker(loop_name, proto=False, app=False):
     def worker(host, port, wid):
         if proto:
-            asyncio_proto_worker(host, port, wid, loop_name=loop_name)
+            asyncio_proto_worker(host, port, wid, loop_name=loop_name, app=app)
         else:
-            asyncio_worker(host, port, wid, loop_name=loop_name)
+            asyncio_worker(host, port, wid, app=app, loop_name=loop_name)
     return worker
 
 
@@ -394,6 +422,7 @@ WORKERS = {
     "uringpy": uringpy_worker,
     "c-epoll": c_epoll_worker,
     "py-uring": py_uring_worker,
+    "py-uring-held": lambda host, port, wid: py_uring_worker(host, port, wid, release_gil=False),
     "py-epoll": py_epoll_worker,
     "asyncio": asyncio_worker,
     "asyncio-proto": _loop_worker("asyncio", proto=True),
@@ -402,7 +431,11 @@ WORKERS = {
     "uringcore": _loop_worker("uringcore"),
     "uringloop": _loop_worker("uringloop"),
     "uringpy-app": lambda host, port, wid: uringpy_worker(host, port, wid, app=True),
-    "asyncio-app": lambda host, port, wid: asyncio_worker(host, port, wid, app=True),
+    "uringpy-app-batch": lambda host, port, wid: uringpy_worker(host, port, wid, app=True,
+                                                                gil_batch=True),
+    "asyncio-app": _loop_worker("asyncio", app=True),
+    "asyncio-proto-app": _loop_worker("asyncio", proto=True, app=True),
+    "uvloop-proto-app": _loop_worker("uvloop", proto=True, app=True),
 }
 
 
@@ -465,11 +498,12 @@ def main(argv=None):
     # Fail before starting any worker if this image lacks the engine, rather
     # than leaving a server with some workers dead.
     try:
-        if args.engine in ("uvloop", "uvloop-proto", "uringcore", "uringloop"):
-            _new_loop(args.engine.replace("-proto", "")).close()
+        if args.engine.split("-")[0] in ("uvloop", "uringcore", "uringloop"):
+            _new_loop(args.engine.split("-")[0]).close()
         elif args.engine == "c-epoll":
             from uringpy import EpollEngine  # noqa: F401
-        elif args.engine in ("uringpy", "uringpy-app", "py-uring"):
+        elif args.engine in ("uringpy", "uringpy-app", "uringpy-app-batch", "py-uring",
+                             "py-uring-held"):
             from uringpy import URingEngine  # noqa: F401
     except Exception as exc:
         sys.exit(f"[{args.engine}] engine unavailable in this environment: {exc!r}")

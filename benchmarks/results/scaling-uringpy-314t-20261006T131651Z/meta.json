@@ -1,0 +1,205 @@
+{
+  "experiment": "scaling",
+  "started_utc": "2026-10-06T13:16:51+00:00",
+  "params": {
+    "reps": 5,
+    "duration": 20,
+    "warmup": 5,
+    "conns": 400,
+    "threads": 8,
+    "seed": 1804126661,
+    "port": 8080,
+    "url": "http://10.142.0.2:8080/"
+  },
+  "cells": [
+    [
+      "uringpy",
+      "thread",
+      1,
+      13,
+      0
+    ],
+    [
+      "uringpy",
+      "thread",
+      2,
+      13,
+      0
+    ],
+    [
+      "uringpy",
+      "thread",
+      3,
+      13,
+      0
+    ],
+    [
+      "uringpy",
+      "thread",
+      4,
+      13,
+      0
+    ],
+    [
+      "uringpy",
+      "process",
+      1,
+      13,
+      0
+    ],
+    [
+      "uringpy",
+      "process",
+      2,
+      13,
+      0
+    ],
+    [
+      "uringpy",
+      "process",
+      3,
+      13,
+      0
+    ],
+    [
+      "uringpy",
+      "process",
+      4,
+      13,
+      0
+    ],
+    [
+      "asyncio",
+      "thread",
+      1,
+      13,
+      0
+    ],
+    [
+      "asyncio",
+      "thread",
+      2,
+      13,
+      0
+    ],
+    [
+      "asyncio",
+      "thread",
+      3,
+      13,
+      0
+    ],
+    [
+      "asyncio",
+      "thread",
+      4,
+      13,
+      0
+    ],
+    [
+      "asyncio",
+      "process",
+      1,
+      13,
+      0
+    ],
+    [
+      "asyncio",
+      "process",
+      2,
+      13,
+      0
+    ],
+    [
+      "asyncio",
+      "process",
+      3,
+      13,
+      0
+    ],
+    [
+      "asyncio",
+      "process",
+      4,
+      13,
+      0
+    ],
+    [
+      "asyncio-proto",
+      "thread",
+      1,
+      13,
+      0
+    ],
+    [
+      "asyncio-proto",
+      "thread",
+      2,
+      13,
+      0
+    ],
+    [
+      "asyncio-proto",
+      "thread",
+      3,
+      13,
+      0
+    ],
+    [
+      "asyncio-proto",
+      "thread",
+      4,
+      13,
+      0
+    ],
+    [
+      "asyncio-proto",
+      "process",
+      1,
+      13,
+      0
+    ],
+    [
+      "asyncio-proto",
+      "process",
+      2,
+      13,
+      0
+    ],
+    [
+      "asyncio-proto",
+      "process",
+      3,
+      13,
+      0
+    ],
+    [
+      "asyncio-proto",
+      "process",
+      4,
+      13,
+      0
+    ]
+  ],
+  "client": {
+    "kernel": "7.0.0-1011-gcp",
+    "nproc": 8,
+    "python": "3.12.3",
+    "cpu_model": "AMD EPYC 7B13",
+    "machine_type": "t2d-standard-8",
+    "wrk": "wrk debian/4.1.0-4build2 [epoll] Copyright (C) 2012 Will Glozer",
+    "git_commit": "b60fe241bf1d2d25b5daaca772f4801477838ba4",
+    "git_dirty": false
+  },
+  "server": {
+    "target": "marimuthu_vm@10.142.0.2",
+    "image": "uringpy:314t",
+    "kernel": "7.0.0-1011-gcp",
+    "nproc": "4",
+    "cpu_model": "AMD EPYC 7B13",
+    "machine_type": "t2d-standard-4",
+    "image_id": "sha256:3602f9e5eda65e560124a1c0c45b0bf7d305cd3d4ce340e8633320c9860ce1d0",
+    "interpreter": "3.14.7 gil_OFF"
+  },
+  "finished_utc": "2026-10-06T14:10:43+00:00"
+}

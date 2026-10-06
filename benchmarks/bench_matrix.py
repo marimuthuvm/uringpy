@@ -22,13 +22,17 @@ Experiments (--experiment), each a preset you can override with --engines,
 
   scaling    uringpy vs asyncio (streams and Protocol API), thread vs process,
              1/2/4 workers
-  app        uringpy vs asyncio with a Python handler per request
+  app        uringpy (GIL per request, and per batch) vs asyncio (streams and
+             Protocol API) and uvloop, with a Python handler per request
   baselines  asyncio and uvloop, each through streams and the Protocol API
-  factorial  2x2 ablation: {io_uring, epoll} x {loop in C, loop in Python}
+  factorial  2x2 ablation: {io_uring, epoll} x {loop in C, loop in Python},
+             plus the Python io_uring loop holding the GIL while it submits
   batch      uringpy with the completions-per-enter cap swept from 1 to unlimited
   loops      asyncio, uvloop, uringcore, uringloop (needs the cross-runtime image)
-  size       response-size sweep, 64 B to 1 MiB
-  handler    uringpy-app with the per-request Python work swept from none to
+  size       response-size sweep, 64 B to 1 MiB, uringpy vs asyncio Protocol
+             API, one process per worker
+  handler    uringpy-app (GIL per request, and per batch) with the per-request
+             Python work swept from none to
              heavy, recording how long each request waits for and holds the GIL
 
 Output, in benchmarks/results/<experiment>-<UTC time>/:
@@ -69,17 +73,24 @@ EXPERIMENTS = {
                     modes=["thread", "process"], workers=[1, 2, 4]),
     "baselines": dict(engines=["asyncio", "asyncio-proto", "uvloop", "uvloop-proto"],
                       modes=["thread", "process"], workers=[1, 4]),
-    "app": dict(engines=["uringpy-app", "asyncio-app"], modes=["thread", "process"],
-                workers=[1, 2, 4]),
-    "factorial": dict(engines=["uringpy", "c-epoll", "py-uring", "py-epoll"],
+    # uvloop-proto-app needs uvloop, which the free-threaded image lacks: pass
+    # --engines "uringpy-app uringpy-app-batch asyncio-app asyncio-proto-app" there.
+    "app": dict(engines=["uringpy-app", "uringpy-app-batch", "asyncio-app",
+                         "asyncio-proto-app", "uvloop-proto-app"],
+                modes=["thread", "process"], workers=[1, 2, 4]),
+    # py-uring-held is py-uring holding the GIL while it submits; it is run
+    # alongside the 2x2 to show what that choice alone does.
+    "factorial": dict(engines=["uringpy", "c-epoll", "py-uring", "py-epoll",
+                               "py-uring-held"],
                       modes=["thread"], workers=[1, 2, 4]),
     "batch": dict(engines=["uringpy"], modes=["thread"], workers=[1],
                   max_batch=[1, 4, 16, 64, 256, 0]),
     "loops": dict(engines=["asyncio", "uvloop", "uringcore", "uringloop"],
                   modes=["thread", "process"], workers=[1, 4]),
-    "size": dict(engines=["uringpy", "asyncio"], modes=["thread"], workers=[4],
+    # Process mode, so that the baseline is not also suffering GIL contention.
+    "size": dict(engines=["uringpy", "asyncio-proto"], modes=["process"], workers=[4],
                  resp_sizes=[64, 1024, 16384, 65536, 262144, 1048576]),
-    "handler": dict(engines=["uringpy-app"], modes=["thread", "process"],
+    "handler": dict(engines=["uringpy-app", "uringpy-app-batch"], modes=["thread", "process"],
                     workers=[1, 2, 4], handler_work=[0, 30, 100, 300, 1000, 3000],
                     gil_timing=True),
 }
@@ -92,7 +103,7 @@ CSV_FIELDS = [
     "client_cpu_pct", "client_steal_pct", "server_cpu_pct", "server_steal_pct",
     "server_max_core_pct", "srv_requests", "srv_syscalls", "srv_enters",
     "srv_completions", "srv_waits", "srv_handler_errors", "srv_handler_calls",
-    "srv_gil_hold_ns", "srv_gil_wait_ns", "srv_cpu_ns", "srv_python",
+    "srv_gil_hold_ns", "srv_gil_wait_ns", "srv_gil_acquires", "srv_cpu_ns", "srv_python",
     "srv_gil", "note",
 ]
 
@@ -439,7 +450,7 @@ def run_one(server, cell, args, url):
     row["srv_python"], row["srv_gil"] = parse_runtime(logs)
     stats = parse_server_stats(logs)
     for key in ("requests", "syscalls", "enters", "completions", "waits", "handler_errors",
-                "handler_calls", "gil_hold_ns", "gil_wait_ns"):
+                "handler_calls", "gil_hold_ns", "gil_wait_ns", "gil_acquires"):
         if key in stats:
             row["srv_" + key] = stats[key]
     cpu_ns = parse_proc_cpu(logs)

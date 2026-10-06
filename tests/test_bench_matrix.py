@@ -137,7 +137,8 @@ def test_build_cells_presets_and_overrides():
                                  workers="1", resp_sizes=None, max_batch=None,
                                  handler_work=None, gil_timing=False)
     cells = bm.build_cells(args)
-    assert [c[5] for c in cells] == [0, 30, 100, 300, 1000, 3000]
+    assert {c[0] for c in cells} == {"uringpy-app", "uringpy-app-batch"}
+    assert [c[5] for c in cells if c[0] == "uringpy-app"] == [0, 30, 100, 300, 1000, 3000]
     assert args.gil_timing is True      # the preset switches GIL timing on
 
 
