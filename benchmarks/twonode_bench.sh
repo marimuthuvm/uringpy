@@ -21,7 +21,7 @@
 #   IMAGE (uringpy:gil) PORT (8080) DURATION (20) CONNS (400) THREADS (nproc)
 #   WORKERS ("1 2 4") ENGINES ("uringpy asyncio") MODES ("thread process")
 #   RESP_SIZE (13)  response body bytes, honoured by every engine
-# Application workload (per-request Python handler, Table "Realistic workload"):
+# Application-handler workload (a small Python handler per request):
 #   ENGINES="uringpy-app asyncio-app" SERVER=... SERVER_IP=... bash benchmarks/twonode_bench.sh
 set -u
 

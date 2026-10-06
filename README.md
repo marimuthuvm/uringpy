@@ -1,5 +1,4 @@
 # uringpy
-# uringpy
 
 [![PyPI](https://img.shields.io/pypi/v/uringpy.svg)](https://pypi.org/project/uringpy/)
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.23129560.svg)](https://doi.org/10.5281/zenodo.23129560)
@@ -62,7 +61,7 @@ A manuscript describing the full methodology and measurements is in preparation.
 
 ## Requirements
 
-- Linux kernel ≥ 5.6 (echo path); `liburing` ≥ 2.3
+- Linux kernel ≥ 5.6 (echo path); `liburing` ≥ 2.4 (the benchmark image builds 2.6)
 - Python ≥ 3.9 (plus a free-threaded build for the no-GIL results)
 - GCC / Clang
 
@@ -151,6 +150,10 @@ instead of assumed.
 
 `python3 benchmarks/bench_matrix.py --experiment scaling --local` runs
 everything on one machine as a smoke test; do not report those numbers.
+
+What each experiment tests, the meaning of every output column, and the
+formula behind every reported number are in
+[`benchmarks/EXPERIMENTS.md`](benchmarks/EXPERIMENTS.md).
 
 ### Quick single-pass scripts
 

@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Realistic per-request work shared by the uringpy-app and asyncio-app servers.
+"""Per-request Python work shared by the uringpy-app and asyncio-app servers.
 
 Both engines call this identical handler, so the comparison isolates *where* the
-per-request Python work runs, not what it does. It parses the HTTP request line
-and computes a small path-dependent checksum -- representative of real routing /
-application logic, unlike the canned-echo path.
+per-request Python work runs, not what it does. The handler is deliberately
+small: it parses the HTTP request line and computes a checksum of the path. It
+stands in for "some interpreted code runs per request"; it is not a model of a
+real application. HANDLER_WORK scales its cost for the handler-cost sweep.
 """
 
 from __future__ import annotations
