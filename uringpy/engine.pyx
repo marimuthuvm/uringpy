@@ -12,6 +12,7 @@ from libc.string cimport memset, memcpy
 from libc.errno cimport EINTR
 from cpython.ref cimport PyObject
 from cpython.exc cimport PyErr_CheckSignals
+from posix.time cimport clock_gettime, timespec, CLOCK_MONOTONIC
 from cpython.bytes cimport PyBytes_FromStringAndSize, PyBytes_AsStringAndSize
 from cpython.buffer cimport PyObject_GetBuffer, PyBuffer_Release, PyBUF_SIMPLE
 
@@ -130,6 +131,13 @@ cdef extern from "unistd.h" nogil:
     int close(int fd)
 
 
+cdef inline unsigned long long _now_ns() noexcept nogil:
+    cdef timespec ts
+    clock_gettime(CLOCK_MONOTONIC, &ts)
+    return <unsigned long long>ts.tv_sec * 1000000000ULL \
+        + <unsigned long long>ts.tv_nsec
+
+
 # --- nogil helpers shared by the C-side reactors -----------------------------
 # Module-level inline functions (not methods) so the C compiler inlines them
 # into the reactor loop.
@@ -222,6 +230,10 @@ cdef class URingEngine:
     cdef unsigned long long stat_requests
     cdef unsigned long long stat_closes
     cdef unsigned _max_batch
+    # Optional timing of the GIL-held section of serve_forever_app.
+    cdef bint _gil_timing
+    cdef unsigned long long stat_gil_hold_ns
+    cdef unsigned long long stat_gil_wait_ns
     def __cinit__(self, unsigned int entries=1024, size_t slot_size=4096, size_t total_slots=1024):
         cdef int ret = io_uring_queue_init(entries, &self.ring, 0)
         if ret < 0:
@@ -253,6 +265,9 @@ cdef class URingEngine:
         self.stat_requests = 0
         self.stat_closes = 0
         self._max_batch = 0
+        self._gil_timing = False
+        self.stat_gil_hold_ns = 0
+        self.stat_gil_wait_ns = 0
         self.initialized = True
 
     def __dealloc__(self):
@@ -515,7 +530,19 @@ cdef class URingEngine:
                 "syscalls": syscalls, "completions_per_enter": cpe,
                 "syscalls_per_request": spr,
                 "handler_calls": self.stat_handler_calls,
-                "handler_errors": self.stat_handler_errors}
+                "handler_errors": self.stat_handler_errors,
+                "gil_hold_ns": self.stat_gil_hold_ns,
+                "gil_wait_ns": self.stat_gil_wait_ns}
+
+    def set_gil_timing(self, bint enabled):
+        # serve_forever_app only. When enabled, every request records how long
+        # the worker waited to get the GIL (gil_wait_ns) and how long it then
+        # held it (gil_hold_ns: building the request bytes, the handler call,
+        # copying the response out). Costs three clock reads per request, so it
+        # is off by default.
+        if self._serving:
+            raise RuntimeError("set_gil_timing() cannot be called while serving")
+        self._gil_timing = enabled
 
     def set_max_batch(self, unsigned int n):
         # Ablation knob for the C reactors: process at most `n` completions per
@@ -605,8 +632,24 @@ cdef class URingEngine:
         self._conn_n = new_n
         return 0
 
-    cdef int _run_handler(self, PyObject *handler, int fd,
-                          const char *req, int n) noexcept with gil:
+    cdef int _run_handler(self, PyObject *handler, int fd, const char *req,
+                          int n, unsigned long long t_req) noexcept with gil:
+        # Entry point from the nogil loop: acquires the GIL (that is what
+        # `with gil` does), runs the handler, releases it on return. `t_req` is
+        # the time just before the acquisition was requested, or 0 when timing
+        # is off.
+        cdef unsigned long long t_in
+        cdef int rc
+        if t_req == 0:
+            return self._handle_locked(handler, fd, req, n)
+        t_in = _now_ns()
+        self.stat_gil_wait_ns += t_in - t_req
+        rc = self._handle_locked(handler, fd, req, n)
+        self.stat_gil_hold_ns += _now_ns() - t_in
+        return rc
+
+    cdef int _handle_locked(self, PyObject *handler, int fd,
+                            const char *req, int n) noexcept:
         # The only GIL-held step of serve_forever_app: build the request bytes,
         # call the handler, and copy its response into this connection's C
         # buffer so the send can proceed with the GIL released. Returns 0 on
@@ -663,6 +706,8 @@ cdef class URingEngine:
         cdef uint64_t ud
         cdef int op, fd, res
         cdef size_t low, off, total
+        cdef bint timing = self._gil_timing
+        cdef unsigned long long t_req
         cdef const char *base
         cdef bint app = handler != NULL
         cdef const char *resp = self._echo_resp
@@ -710,9 +755,13 @@ cdef class URingEngine:
                         close(fd)
                         self.stat_closes += 1
                     elif app:
+                        t_req = 0
+                        if timing:
+                            t_req = _now_ns()
                         rc = self._run_handler(
                             handler, fd,
-                            <const char*>self.pool.raw_memory + low * slot_size, res)
+                            <const char*>self.pool.raw_memory + low * slot_size,
+                            res, t_req)
                         slab_free(self.pool, <int32_t>low)
                         if rc < 0:
                             close(fd)

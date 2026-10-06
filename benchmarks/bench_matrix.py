@@ -18,7 +18,7 @@ Two ways to run the server:
       python3 benchmarks/bench_matrix.py --experiment scaling --local
 
 Experiments (--experiment), each a preset you can override with --engines,
---modes, --workers, --resp-sizes and --max-batch:
+--modes, --workers, --resp-sizes, --max-batch and --handler-work:
 
   scaling    uringpy vs asyncio (streams and Protocol API), thread vs process,
              1/2/4 workers
@@ -28,6 +28,8 @@ Experiments (--experiment), each a preset you can override with --engines,
   batch      uringpy with the completions-per-enter cap swept from 1 to unlimited
   loops      asyncio, uvloop, uringcore, uringloop (needs the cross-runtime image)
   size       response-size sweep, 64 B to 1 MiB
+  handler    uringpy-app with the per-request Python work swept from none to
+             heavy, recording how long each request waits for and holds the GIL
 
 Output, in benchmarks/results/<experiment>-<UTC time>/:
   runs.csv     one row per measured run (raw data)
@@ -77,16 +79,20 @@ EXPERIMENTS = {
                   modes=["thread", "process"], workers=[1, 4]),
     "size": dict(engines=["uringpy", "asyncio"], modes=["thread"], workers=[4],
                  resp_sizes=[64, 1024, 16384, 65536, 262144, 1048576]),
+    "handler": dict(engines=["uringpy-app"], modes=["thread", "process"],
+                    workers=[1, 2, 4], handler_work=[0, 30, 100, 300, 1000, 3000],
+                    gil_timing=True),
 }
 
 CSV_FIELDS = [
     "experiment", "rep", "order", "engine", "mode", "workers", "resp_size",
-    "max_batch", "status", "rps", "duration_s", "requests",
+    "max_batch", "handler_work", "status", "rps", "duration_s", "requests",
     "lat_p50_ms", "lat_p75_ms", "lat_p90_ms", "lat_p99_ms", "lat_avg_ms",
     "transfer_mb_s", "socket_errors", "non_2xx",
     "client_cpu_pct", "client_steal_pct", "server_cpu_pct", "server_steal_pct",
     "server_max_core_pct", "srv_requests", "srv_syscalls", "srv_enters",
-    "srv_completions", "srv_waits", "srv_handler_errors", "srv_python",
+    "srv_completions", "srv_waits", "srv_handler_errors", "srv_handler_calls",
+    "srv_gil_hold_ns", "srv_gil_wait_ns", "srv_cpu_ns", "srv_python",
     "srv_gil", "note",
 ]
 
@@ -208,6 +214,12 @@ def parse_server_stats(log_text):
             except ValueError:
                 pass
     return totals
+
+
+def parse_proc_cpu(log_text):
+    """Sum of '[proc] cpu_ns=N' lines: CPU time used by the server processes."""
+    values = re.findall(r"^\[proc\] cpu_ns=(\d+)", log_text, re.M)
+    return sum(int(v) for v in values) if values else None
 
 
 def parse_runtime(log_text):
@@ -390,12 +402,17 @@ def local_proc_stat():
 
 def run_one(server, cell, args, url):
     """Measure one cell once; returns a dict of CSV fields."""
-    engine, mode, workers, resp_size, max_batch = cell
+    engine, mode, workers, resp_size, max_batch, handler_work = cell
     row = {"engine": engine, "mode": mode, "workers": workers,
-           "resp_size": resp_size, "max_batch": max_batch, "status": "ok", "note": ""}
+           "resp_size": resp_size, "max_batch": max_batch,
+           "handler_work": handler_work, "status": "ok", "note": ""}
     env = {"URINGPY_STATS": 1, "RESP_SIZE": resp_size}
     if max_batch:
         env["URINGPY_MAX_BATCH"] = max_batch
+    if handler_work:
+        env["HANDLER_WORK"] = handler_work
+    if args.gil_timing:
+        env["URINGPY_GIL_TIMING"] = 1
     server.start(engine, mode, workers, env)
     try:
         if not wait_ready(url):
@@ -421,9 +438,13 @@ def run_one(server, cell, args, url):
             row["note"] = lines[-1][:200] if lines else "server did not answer"
     row["srv_python"], row["srv_gil"] = parse_runtime(logs)
     stats = parse_server_stats(logs)
-    for key in ("requests", "syscalls", "enters", "completions", "waits", "handler_errors"):
+    for key in ("requests", "syscalls", "enters", "completions", "waits", "handler_errors",
+                "handler_calls", "gil_hold_ns", "gil_wait_ns"):
         if key in stats:
             row["srv_" + key] = stats[key]
+    cpu_ns = parse_proc_cpu(logs)
+    if cpu_ns is not None:
+        row["srv_cpu_ns"] = cpu_ns
     return row
 
 
@@ -449,12 +470,18 @@ def _avg(rows, key):
     return sum(vals) / len(vals) if vals else float("nan")
 
 
+def _sum(rows, key):
+    vals = [v for v in (_num(r, key) for r in rows) if not math.isnan(v)]
+    return sum(vals)
+
+
 def summarize(rows, meta=None):
     """Build the Markdown summary from raw run rows (dicts of CSV fields)."""
     groups, order = {}, []
     for r in rows:
+        # handler_work is absent from results written before the column existed.
         key = (r["engine"], r["mode"], int(r["workers"]), int(r["resp_size"]),
-               int(r["max_batch"]))
+               int(r["max_batch"]), int(r.get("handler_work") or 0))
         if key not in groups:
             groups[key] = []
             order.append(key)
@@ -462,7 +489,7 @@ def summarize(rows, meta=None):
 
     # Present cells in the order the experiment defines them, not run order.
     if meta and meta.get("cells"):
-        rank = {tuple(c): i for i, c in enumerate(meta["cells"])}
+        rank = {tuple(c) + (0,) * (6 - len(c)): i for i, c in enumerate(meta["cells"])}
         order.sort(key=lambda k: rank.get(k, len(rank)))
 
     lines = ["# Benchmark summary", ""]
@@ -482,18 +509,21 @@ def summarize(rows, meta=None):
               "half-width of the 95% confidence interval (Student t). Scaling is the "
               "ratio to the 1-worker cell of the same engine and mode, with its 95% "
               "half-width. CPU columns are whole-machine busy %, averaged over runs. GIL is "
-              "the state the server process reported at start-up.", ""]
-    lines += ["| engine | mode | workers | GIL | body B | batch cap | n | req/s | ± 95% CI | CV % | scaling | p50 ms | p99 ms | server CPU % | busiest core % | client CPU % | syscalls/req | compl/enter | flags |",
-              "| --- | --- | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |"]
+              "the state the server process reported at start-up. Proc CPU is the "
+              "server processes' own user+system time per request (kernel network "
+              "work done outside them is not included). GIL hold and wait are per "
+              "handler call, where timing was enabled.", ""]
+    lines += ["| engine | mode | workers | GIL | body B | batch cap | handler work | n | req/s | ± 95% CI | CV % | scaling | p50 ms | p99 ms | server CPU % | busiest core % | client CPU % | syscalls/req | compl/enter | proc CPU µs/req | GIL hold µs/req | GIL wait µs/req | flags |",
+              "| --- | --- | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |"]
     for key in order:
-        engine, mode, workers, resp_size, max_batch = key
+        engine, mode, workers, resp_size, max_batch, handler_work = key
         runs = groups[key]
         good = [r for r in runs if r.get("status") == "ok"]
         rps = [v for v in (_num(r, "rps") for r in good) if not math.isnan(v)]
         m, sd = mean_sd(rps)
         hw = ci95(rps)
         cv = 100 * sd / m if rps and m and not math.isnan(sd) else float("nan")
-        base = groups.get((engine, mode, 1, resp_size, max_batch), [])
+        base = groups.get((engine, mode, 1, resp_size, max_batch, handler_work), [])
         base_rps = [v for v in (_num(r, "rps") for r in base if r.get("status") == "ok")
                     if not math.isnan(v)]
         scaling = "-"
@@ -508,6 +538,14 @@ def summarize(rows, meta=None):
         comp = sum(_num(r, "srv_completions") for r in good if not math.isnan(_num(r, "srv_completions")))
         spr = sysc / req if req and sysc else float("nan")
         cpe = comp / ent if ent and comp else float("nan")
+        # Per-request costs from the server's own counters (whole server
+        # lifetime, warm-up included, so numerator and denominator match).
+        cpu_ns = _sum([r for r in good if not math.isnan(_num(r, "srv_requests"))], "srv_cpu_ns")
+        cpu_us = cpu_ns / req / 1e3 if req and cpu_ns else float("nan")
+        timed = [r for r in good if _num(r, "srv_gil_hold_ns") > 0]
+        timed_calls = _sum(timed, "srv_handler_calls")
+        hold_us = _sum(timed, "srv_gil_hold_ns") / timed_calls / 1e3 if timed_calls else float("nan")
+        wait_us = _sum(timed, "srv_gil_wait_ns") / timed_calls / 1e3 if timed_calls else float("nan")
         client_cpu = _avg(good, "client_cpu_pct")
         flags = []
         if len(good) < len(runs):
@@ -525,11 +563,13 @@ def summarize(rows, meta=None):
             notes = sorted({r.get("note", "") for r in runs if r.get("note")})
             flags.append("no successful run" + (": " + "; ".join(notes) if notes else ""))
         lines.append(
-            f"| {engine} | {mode} | {workers} | {gil} | {resp_size} | {max_batch or 'none'} | {len(rps)} "
+            f"| {engine} | {mode} | {workers} | {gil} | {resp_size} | {max_batch or 'none'} "
+            f"| {handler_work} | {len(rps)} "
             f"| {_f(m)} | {_f(hw)} | {_f(cv, 1)} | {scaling} "
             f"| {_f(_avg(good, 'lat_p50_ms'), 2)} | {_f(_avg(good, 'lat_p99_ms'), 2)} "
             f"| {_f(_avg(good, 'server_cpu_pct'), 1)} | {_f(_avg(good, 'server_max_core_pct'), 1)} "
-            f"| {_f(client_cpu, 1)} | {_f(spr, 3)} | {_f(cpe, 1)} | {'; '.join(flags)} |")
+            f"| {_f(client_cpu, 1)} | {_f(spr, 3)} | {_f(cpe, 1)} | {_f(cpu_us, 2)} "
+            f"| {_f(hold_us, 2)} | {_f(wait_us, 2)} | {'; '.join(flags)} |")
     lines.append("")
     return "\n".join(lines)
 
@@ -558,8 +598,12 @@ def build_cells(args):
     workers = _ints(args.workers) if args.workers else preset["workers"]
     sizes = _ints(args.resp_sizes) if args.resp_sizes else preset.get("resp_sizes", [13])
     batches = _ints(args.max_batch) if args.max_batch else preset.get("max_batch", [0])
-    return [(e, m, w, s, b) for e in engines for m in modes for w in workers
-            for s in sizes for b in batches]
+    works = (_ints(args.handler_work) if args.handler_work
+             else preset.get("handler_work", [0]))
+    if preset.get("gil_timing"):
+        args.gil_timing = True
+    return [(e, m, w, s, b, h) for e in engines for m in modes for w in workers
+            for s in sizes for b in batches for h in works]
 
 
 def describe_client(wrk):
@@ -603,6 +647,10 @@ def main(argv=None):
     ap.add_argument("--workers")
     ap.add_argument("--resp-sizes")
     ap.add_argument("--max-batch")
+    ap.add_argument("--handler-work",
+                    help="extra Python iterations per request for the app engines")
+    ap.add_argument("--gil-timing", action="store_true",
+                    help="record per-request GIL wait/hold time (uringpy-app)")
     args = ap.parse_args(argv)
 
     if args.summarize:
@@ -672,7 +720,7 @@ def main(argv=None):
                 rows.append({k: row.get(k, "") for k in CSV_FIELDS})
                 rps = row.get("rps", float("nan"))
                 print(f"[{done}/{total}] rep {rep} {cell[0]}/{cell[1]} w={cell[2]} "
-                      f"size={cell[3]} batch={cell[4] or 'none'}: "
+                      f"size={cell[3]} batch={cell[4] or 'none'} work={cell[5]}: "
                       f"{row['status']} {_f(rps)} req/s "
                       f"(server CPU {_f(row.get('server_cpu_pct', float('nan')), 0)}%, "
                       f"client CPU {_f(row.get('client_cpu_pct', float('nan')), 0)}%)"

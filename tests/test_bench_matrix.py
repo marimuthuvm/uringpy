@@ -54,6 +54,11 @@ def test_parse_server_stats_sums_workers_and_skips_ratios():
                  "syscalls": 44}
 
 
+def test_parse_proc_cpu():
+    assert bm.parse_proc_cpu("[proc] cpu_ns=1500\n[worker 0] waits=1\n[proc] cpu_ns=500\n") == 2000
+    assert bm.parse_proc_cpu("no stats") is None
+
+
 def test_parse_runtime():
     log = "[runtime] python=3.14.7 gil_enabled=0\n[uringpy/thread] starting 4 worker(s)\n"
     assert bm.parse_runtime(log) == ("3.14.7", "off")
@@ -94,7 +99,7 @@ def test_ratio_ci():
 def _row(engine, workers, rps, status="ok", **kw):
     row = {k: "" for k in bm.CSV_FIELDS}
     row.update(engine=engine, mode="thread", workers=workers, resp_size=13,
-               max_batch=0, status=status, rps=rps, srv_gil="on", client_cpu_pct=40.0,
+               max_batch=0, handler_work=0, status=status, rps=rps, srv_gil="on", client_cpu_pct=40.0,
                server_cpu_pct=60.0, lat_p50_ms=1.0, lat_p99_ms=2.0)
     row.update(kw)
     return row
@@ -118,9 +123,34 @@ def test_summarize_scaling_and_flags():
 def test_build_cells_presets_and_overrides():
     args = bm.argparse.Namespace(experiment="batch", engines=None, modes=None,
                                  workers=None, resp_sizes=None, max_batch=None)
+    args.handler_work = None
+    args.gil_timing = False
     cells = bm.build_cells(args)
-    assert len(cells) == 6 and ("uringpy", "thread", 1, 13, 0) in cells
+    assert len(cells) == 6 and ("uringpy", "thread", 1, 13, 0, 0) in cells
+    assert args.gil_timing is False
     args = bm.argparse.Namespace(experiment="scaling", engines="uringpy", modes="thread",
-                                 workers="1,8", resp_sizes=None, max_batch=None)
-    assert bm.build_cells(args) == [("uringpy", "thread", 1, 13, 0),
-                                    ("uringpy", "thread", 8, 13, 0)]
+                                 workers="1,8", resp_sizes=None, max_batch=None,
+                                 handler_work=None, gil_timing=False)
+    assert bm.build_cells(args) == [("uringpy", "thread", 1, 13, 0, 0),
+                                    ("uringpy", "thread", 8, 13, 0, 0)]
+    args = bm.argparse.Namespace(experiment="handler", engines=None, modes="thread",
+                                 workers="1", resp_sizes=None, max_batch=None,
+                                 handler_work=None, gil_timing=False)
+    cells = bm.build_cells(args)
+    assert [c[5] for c in cells] == [0, 30, 100, 300, 1000, 3000]
+    assert args.gil_timing is True      # the preset switches GIL timing on
+
+
+def test_summarize_handler_columns_and_old_results():
+    new = [_row("uringpy-app", 1, 100.0, handler_work=300, srv_requests=1000,
+                srv_handler_calls=1000, srv_gil_hold_ns=5_000_000,
+                srv_gil_wait_ns=250_000, srv_cpu_ns=20_000_000)]
+    line = [l for l in bm.summarize(new).splitlines() if l.startswith("| uringpy-app")][0]
+    assert "| 300 |" in line                      # handler work column
+    assert "| 20.00 | 5.00 | 0.25 |" in line      # proc CPU, GIL hold, GIL wait (µs/req)
+    # Results written before the handler_work column existed still summarise,
+    # including with the 5-element cell lists their meta.json holds.
+    old = _row("uringpy", 1, 100.0)
+    del old["handler_work"]
+    meta = {"cells": [["uringpy", "thread", 1, 13, 0]], "params": {}}
+    assert "| uringpy | thread | 1 |" in bm.summarize([old], meta)

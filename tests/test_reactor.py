@@ -31,7 +31,7 @@ class Server:
     """Runs one engine in a thread; stop() wakes it with a throwaway connect."""
 
     def __init__(self, response=None, handler=None, sndbuf=None, kind="uring",
-                 max_batch=0):
+                 max_batch=0, gil_timing=False):
         if kind == "epoll":
             self.engine = EpollEngine()
         else:
@@ -41,6 +41,8 @@ class Server:
                 pytest.skip(f"io_uring unavailable: {e}")
             if max_batch:
                 self.engine.set_max_batch(max_batch)
+            if gil_timing:
+                self.engine.set_gil_timing(True)
         self.listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         if sndbuf:  # inherited by accepted sockets
@@ -308,6 +310,29 @@ def test_app_handler_error_closes_only_that_connection(capfd):
         good.close()
         assert srv.engine.get_stats()["handler_errors"] == 2
     assert "RuntimeError: boom" in capfd.readouterr().err
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_gil_timing_counts_only_when_enabled(enabled):
+    def handler(data):
+        time.sleep(0.002)  # held with the GIL from the reactor's point of view
+        return _response(b"ok")
+
+    want = _response(b"ok")
+    with Server(handler=handler, gil_timing=enabled) as srv:
+        c = srv.connect()
+        for _ in range(5):
+            c.sendall(REQUEST)
+            assert recv_exact(c, len(want)) == want
+        c.close()
+        st = srv.engine.get_stats()
+    assert st["handler_calls"] == 5
+    if enabled:
+        # Five calls of at least 2 ms each, and not absurdly more.
+        assert 5 * 2_000_000 <= st["gil_hold_ns"] < 5 * 200_000_000
+        assert st["gil_wait_ns"] < st["gil_hold_ns"]
+    else:
+        assert st["gil_hold_ns"] == 0 and st["gil_wait_ns"] == 0
 
 
 def test_app_rejects_non_callable():

@@ -130,6 +130,7 @@ python3 benchmarks/bench_matrix.py --experiment baselines   # asyncio and uvloop
 python3 benchmarks/bench_matrix.py --experiment factorial   # {io_uring, epoll} x {C loop, Python loop}
 python3 benchmarks/bench_matrix.py --experiment batch       # completions-per-enter cap, 1 .. unlimited
 python3 benchmarks/bench_matrix.py --experiment size        # response size, 64 B .. 1 MiB
+python3 benchmarks/bench_matrix.py --experiment handler     # per-request Python work, none .. heavy
 ```
 
 Defaults: 5 repetitions of 20 s after a 5 s warm-up, 400 connections; each
@@ -141,6 +142,12 @@ the server process reported, and the summary shows it. The `loops` experiment
 `benchmarks/crossruntime/Dockerfile.py313`. The summary flags
 cells where the client was above 85% CPU, since there the load generator, not
 the server, may be the limit.
+
+The `handler` experiment varies how much interpreted work each request does
+(`HANDLER_WORK`) and switches on `URingEngine.set_gil_timing()`, so every run
+also reports how long a request waits for the GIL and how long it holds it.
+Those two numbers are what a GIL-contention model needs as inputs, measured
+instead of assumed.
 
 `python3 benchmarks/bench_matrix.py --experiment scaling --local` runs
 everything on one machine as a smoke test; do not report those numbers.

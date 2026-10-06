@@ -56,6 +56,10 @@ Env:
                          "Hello, world!"). The echo engines send a body of
                          exactly that size; the app engines pad the handler's
                          JSON body up to it (see app_workload.py).
+  HANDLER_WORK=<n>       app engines: n extra iterations of Python arithmetic
+                         per request (see app_workload.py).
+  URINGPY_GIL_TIMING=1   uringpy-app only: record per-request GIL wait and
+                         hold time (gil_wait_ns / gil_hold_ns in the counters).
   URINGPY_MAX_BATCH=<n>  uringpy / uringpy-app only: process at most n
                          completions per io_uring_enter (0 = unlimited).
 """
@@ -68,6 +72,7 @@ import signal
 import socket
 import sys
 import threading
+import time
 
 
 def _echo_body():
@@ -90,6 +95,7 @@ HTTP_RESPONSE = (
 
 STATS = os.environ.get("URINGPY_STATS", "0") == "1"
 MAX_BATCH = int(os.environ.get("URINGPY_MAX_BATCH") or 0)
+GIL_TIMING = os.environ.get("URINGPY_GIL_TIMING", "0") == "1"
 
 # (wid, get_stats) for every worker in THIS process that keeps counters, so the
 # shutdown handler can print them.
@@ -101,6 +107,8 @@ def _fmt(value):
 
 
 def _print_stats():
+    # CPU time (user + system) this process has used, for cost-per-request.
+    print(f"[proc] cpu_ns={time.process_time_ns()}", flush=True)
     for wid, get_stats in _STAT_SOURCES:
         stats = get_stats()
         print(f"[worker {wid}] " + " ".join(f"{k}={_fmt(v)}" for k, v in stats.items()),
@@ -144,6 +152,8 @@ def uringpy_worker(host, port, wid, app=False):
         engine.set_max_batch(MAX_BATCH)
     if app:
         from app_workload import handle_request
+        if GIL_TIMING:
+            engine.set_gil_timing(True)
     else:
         engine.set_response(HTTP_RESPONSE)
     _STAT_SOURCES.append((wid, engine.get_stats))
@@ -403,6 +413,8 @@ def run(worker_fn, workers, mode, host, port):
             pid = os.fork()
             if pid == 0:
                 worker_fn(host, port, wid)  # child: runs until signalled
+                if STATS:  # workers that return (asyncio loops) report here
+                    _print_stats()
                 os._exit(0)
             pids.append(pid)
 
