@@ -10,6 +10,12 @@ shards connections across workers. Two axes:
                      region (GIL released for the worker's lifetime).
   --engine asyncio : each worker runs its own asyncio loop; every completion is
                      dispatched in Python bytecode.
+  --engine uringpy-app / asyncio-app :
+                     the application workload. Every request is passed to the
+                     same Python handler (app_workload.handle_request). uringpy
+                     runs it via URingEngine.serve_forever_app(), which keeps
+                     accept/recv/send in C and takes the GIL only for the
+                     handler call; asyncio runs it inside its stream handler.
 
   --mode thread    : all workers in ONE process/interpreter (shared GIL). This
                      is where the thesis bites: uringpy scales, asyncio can't.
@@ -23,7 +29,10 @@ Usage:
     python3 benchmarks/sharded_server.py --engine asyncio --mode process --workers 4
 
 Env: URINGPY_STATS=1 makes each uringpy worker print completions_per_wait on
-exit.
+     exit.
+     RESP_SIZE=<bytes> sets the response body size (default: the 13-byte
+     "Hello, world!"). The echo engines send a body of exactly that size; the
+     app engines pad the handler's JSON body up to it (see app_workload.py).
 """
 
 from __future__ import annotations
@@ -35,7 +44,16 @@ import socket
 import sys
 import threading
 
-_BODY = b"Hello, world!"
+def _echo_body():
+    # RESP_SIZE unset or 13 gives the original b"Hello, world!" byte for byte.
+    base = b"Hello, world!"
+    size = int(os.environ.get("RESP_SIZE") or 0)
+    if size <= 0:
+        return base
+    return (base * (size // len(base) + 1))[:size]
+
+
+_BODY = _echo_body()
 HTTP_RESPONSE = (
     b"HTTP/1.1 200 OK\r\n"
     b"Content-Type: text/plain\r\n"
@@ -57,8 +75,12 @@ def _print_stats():
         st = engine.get_stats()
         total_w += st["waits"]
         total_c += st["completions"]
+        app = ""
+        if st.get("handler_calls"):
+            app = (f" handler_calls={st['handler_calls']}"
+                   f" handler_errors={st['handler_errors']}")
         print(f"[worker {wid}] completions_per_wait={st['completions_per_wait']:.2f} "
-              f"waits={st['waits']} completions={st['completions']}", flush=True)
+              f"waits={st['waits']} completions={st['completions']}{app}", flush=True)
     if total_w:
         print(f"[all] completions_per_wait={total_c / total_w:.2f} "
               f"waits={total_w} completions={total_c}", flush=True)
@@ -73,13 +95,20 @@ def make_reuseport_listener(host, port, backlog=1024):
     return sock
 
 
-def uringpy_worker(host, port, wid):
-    """One uringpy worker: own ring, own SO_REUSEPORT socket, nogil C reactor."""
+def uringpy_worker(host, port, wid, app=False):
+    """One uringpy worker: own ring, own SO_REUSEPORT socket, nogil C reactor.
+
+    app=False serves the canned response entirely in C (serve_forever_echo).
+    app=True calls the shared Python handler per request (serve_forever_app).
+    """
     from uringpy import URingEngine
 
     listener = make_reuseport_listener(host, port)
     engine = URingEngine(entries=8192, slot_size=4096, total_slots=32768)
-    engine.set_response(HTTP_RESPONSE)
+    if app:
+        from app_workload import handle_request
+    else:
+        engine.set_response(HTTP_RESPONSE)
     _ENGINES.append((wid, engine))
 
     # signal.signal() only works in the main thread; in --mode thread the parent
@@ -92,12 +121,26 @@ def uringpy_worker(host, port, wid):
             os._exit(0)
         signal.signal(signal.SIGTERM, _term)
         signal.signal(signal.SIGINT, _term)
-    engine.serve_forever_echo(listener.fileno())
+    if app:
+        engine.serve_forever_app(listener.fileno(), handle_request)
+    else:
+        engine.serve_forever_echo(listener.fileno())
 
 
-def asyncio_worker(host, port, wid):
-    """One asyncio worker: own loop, own SO_REUSEPORT socket."""
+def uringpy_app_worker(host, port, wid):
+    uringpy_worker(host, port, wid, app=True)
+
+
+def asyncio_worker(host, port, wid, app=False):
+    """One asyncio worker: own loop, own SO_REUSEPORT socket.
+
+    app=True answers each request with the shared Python handler instead of the
+    canned response -- the same handler uringpy-app calls.
+    """
     import asyncio
+
+    if app:
+        from app_workload import handle_request
 
     async def handle(reader, writer):
         try:
@@ -105,7 +148,7 @@ def asyncio_worker(host, port, wid):
                 data = await reader.read(4096)
                 if not data:
                     break
-                writer.write(HTTP_RESPONSE)
+                writer.write(handle_request(data) if app else HTTP_RESPONSE)
                 await writer.drain()
         except (ConnectionResetError, BrokenPipeError):
             pass
@@ -127,6 +170,18 @@ def asyncio_worker(host, port, wid):
     finally:
         server.close()
         loop.close()
+
+
+def asyncio_app_worker(host, port, wid):
+    asyncio_worker(host, port, wid, app=True)
+
+
+WORKERS = {
+    "uringpy": uringpy_worker,
+    "asyncio": asyncio_worker,
+    "uringpy-app": uringpy_app_worker,
+    "asyncio-app": asyncio_app_worker,
+}
 
 
 def run(worker_fn, workers, mode, host, port):
@@ -180,14 +235,14 @@ def main(argv=None):
     parser = argparse.ArgumentParser(
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--engine", choices=["uringpy", "asyncio"], required=True)
+    parser.add_argument("--engine", choices=sorted(WORKERS), required=True)
     parser.add_argument("--mode", choices=["thread", "process"], default="thread")
     parser.add_argument("--workers", type=int, default=os.cpu_count() or 1)
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8080)
     args = parser.parse_args(argv)
 
-    worker_fn = uringpy_worker if args.engine == "uringpy" else asyncio_worker
+    worker_fn = WORKERS[args.engine]
     print(f"[{args.engine}/{args.mode}] starting {args.workers} worker(s)",
           flush=True)
     run(worker_fn, args.workers, args.mode, args.host, args.port)

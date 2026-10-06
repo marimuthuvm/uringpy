@@ -17,7 +17,7 @@ _HDR = (b"HTTP/1.1 200 OK\r\n"
         b"Content-Length: ")
 
 # Pad the response body to RESP_SIZE bytes (0 = natural size) for the size sweep.
-_PAD_TO = int(os.environ.get("RESP_SIZE", "0"))
+_PAD_TO = int(os.environ.get("RESP_SIZE") or 0)
 
 
 def handle_request(data: bytes) -> bytes:

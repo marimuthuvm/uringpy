@@ -42,6 +42,10 @@ A manuscript describing the full methodology and measurements is in preparation.
 - **Kernel interface:** Cython bindings to `liburing` submission/completion rings.
 - **C-side reactor:** `URingEngine.serve_forever_echo()` runs the connection
   state machine in one `nogil` region — no per-completion Python object.
+- **Application reactor:** `URingEngine.serve_forever_app(fd, handler)` runs the
+  same loop but calls a Python `handler(request_bytes) -> response_bytes` for
+  each request, taking the GIL only for that call. This is the boundary case
+  measured by the application workload (`--engine uringpy-app`).
 - **Sharding:** N workers, each its own ring + `SO_REUSEPORT` socket; the kernel
   shards connections. No shared mutable state, no cross-worker locks.
 - **Free-threading safe:** the extension declares free-threading compatibility.
@@ -103,6 +107,11 @@ docker build -t uringpy:gil .
 docker run --rm --security-opt seccomp=unconfined uringpy:gil \
     bash benchmarks/scaling_matrix.sh
 
+# Application workload: the same Python handler under both engines
+docker run --rm --security-opt seccomp=unconfined \
+    -e ENGINES="uringpy-app asyncio-app" uringpy:gil \
+    bash benchmarks/scaling_matrix.sh
+
 # GIL-vs-syscall isolation probe (no io_uring required)
 python3 benchmarks/setup_gilprobe.py build_ext --inplace
 python3 benchmarks/gil_experiment.py
@@ -113,6 +122,19 @@ hosts via [`benchmarks/twonode_bench.sh`](benchmarks/twonode_bench.sh) (set
 `SERVER` / `SERVER_IP`). Free-threaded (no-GIL) image:
 [`Dockerfile.freethreaded`](Dockerfile.freethreaded).
 
+The same two-node driver runs the application workload and the response-size
+sweep:
+
+```bash
+# on the client VM
+ENGINES="uringpy-app asyncio-app" SERVER=user@host SERVER_IP=10.0.0.2 \
+    bash benchmarks/twonode_bench.sh
+SERVER=user@host SERVER_IP=10.0.0.2 bash benchmarks/bodysize_bench.sh
+```
+
+`RESP_SIZE=<bytes>` sets the response body size for every engine of
+`benchmarks/sharded_server.py` (default: the 13-byte `Hello, world!`).
+
 ## Limitations
 
 - Evaluated on one protocol, kernel, and CPU; tiny-response throughput is
@@ -120,6 +142,9 @@ hosts via [`benchmarks/twonode_bench.sh`](benchmarks/twonode_bench.sh) (set
 - The multicore thread-scaling benefit applies to I/O-framing-dominated
   services; per-request Python logic requires process-level parallelism.
 - Not a drop-in `asyncio` replacement — it is a specialized reactor.
+- Both reactors reply once per `recv()` and do not parse HTTP framing, so
+  pipelined or fragmented requests are not handled. Responses must be shorter
+  than 16 MiB.
 
 ## Citation
 
