@@ -35,7 +35,10 @@ import socket
 import sys
 import threading
 
-_BODY = b"Hello, world!"
+# RESP_SIZE pads the response BODY to this many bytes (default 13 = "Hello, world!")
+# so the harness can sweep response size and expose the small-vs-large crossover.
+RESP_SIZE = int(os.environ.get("RESP_SIZE", "13"))
+_BODY = b"x" * RESP_SIZE
 HTTP_RESPONSE = (
     b"HTTP/1.1 200 OK\r\n"
     b"Content-Type: text/plain\r\n"
@@ -49,6 +52,15 @@ STATS = os.environ.get("URINGPY_STATS", "0") == "1"
 # (wid, engine) for every uringpy worker in THIS process, so a shutdown handler
 # can read each ring's completions_per_wait (syscall-amortization evidence).
 _ENGINES = []
+
+
+def _make_engine(resp_len):
+    # Slab slots must hold the whole response (the nogil send copies into one).
+    # Size slots to the response and bound total slab memory to ~256 MB/engine.
+    from uringpy import URingEngine
+    slot_size = max(4096, resp_len + 512)
+    total_slots = max(256, min(32768, (256 << 20) // slot_size))
+    return URingEngine(entries=8192, slot_size=slot_size, total_slots=total_slots)
 
 
 def _print_stats():
@@ -75,10 +87,8 @@ def make_reuseport_listener(host, port, backlog=1024):
 
 def uringpy_worker(host, port, wid):
     """One uringpy worker: own ring, own SO_REUSEPORT socket, nogil C reactor."""
-    from uringpy import URingEngine
-
     listener = make_reuseport_listener(host, port)
-    engine = URingEngine(entries=8192, slot_size=4096, total_slots=32768)
+    engine = _make_engine(len(HTTP_RESPONSE))
     engine.set_response(HTTP_RESPONSE)
     _ENGINES.append((wid, engine))
 
@@ -93,6 +103,25 @@ def uringpy_worker(host, port, wid):
         signal.signal(signal.SIGTERM, _term)
         signal.signal(signal.SIGINT, _term)
     engine.serve_forever_echo(listener.fileno())
+
+
+def uringpy_app_worker(host, port, wid):
+    """uringpy worker running the realistic handler: each request crosses into
+    Python via serve_forever_app (the honest boundary vs the all-C echo path)."""
+    from app_workload import handle_request
+
+    listener = make_reuseport_listener(host, port)
+    engine = _make_engine(RESP_SIZE + 512)
+    _ENGINES.append((wid, engine))
+
+    if threading.current_thread() is threading.main_thread():
+        def _term(*_):
+            if STATS:
+                _print_stats()
+            os._exit(0)
+        signal.signal(signal.SIGTERM, _term)
+        signal.signal(signal.SIGINT, _term)
+    engine.serve_forever_app(handle_request, listener.fileno())
 
 
 def asyncio_worker(host, port, wid):
@@ -119,6 +148,39 @@ def asyncio_worker(host, port, wid):
 
     # signal.signal() only works in the main thread; in --mode thread the parent
     # installs the handler instead (see run()).
+    if threading.current_thread() is threading.main_thread():
+        signal.signal(signal.SIGTERM, lambda *_: loop.call_soon_threadsafe(loop.stop))
+        signal.signal(signal.SIGINT, lambda *_: loop.call_soon_threadsafe(loop.stop))
+    try:
+        loop.run_forever()
+    finally:
+        server.close()
+        loop.close()
+
+
+def asyncio_app_worker(host, port, wid):
+    """asyncio worker running the same realistic handler as uringpy-app."""
+    import asyncio
+    from app_workload import handle_request
+
+    async def handle(reader, writer):
+        try:
+            while True:
+                data = await reader.read(4096)
+                if not data:
+                    break
+                writer.write(handle_request(data))
+                await writer.drain()
+        except (ConnectionResetError, BrokenPipeError):
+            pass
+        finally:
+            writer.close()
+
+    listener = make_reuseport_listener(host, port)
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    server = loop.run_until_complete(asyncio.start_server(handle, sock=listener))
+
     if threading.current_thread() is threading.main_thread():
         signal.signal(signal.SIGTERM, lambda *_: loop.call_soon_threadsafe(loop.stop))
         signal.signal(signal.SIGINT, lambda *_: loop.call_soon_threadsafe(loop.stop))
@@ -180,14 +242,21 @@ def main(argv=None):
     parser = argparse.ArgumentParser(
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--engine", choices=["uringpy", "asyncio"], required=True)
+    parser.add_argument("--engine",
+                        choices=["uringpy", "uringpy-app", "asyncio", "asyncio-app"],
+                        required=True)
     parser.add_argument("--mode", choices=["thread", "process"], default="thread")
     parser.add_argument("--workers", type=int, default=os.cpu_count() or 1)
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8080)
     args = parser.parse_args(argv)
 
-    worker_fn = uringpy_worker if args.engine == "uringpy" else asyncio_worker
+    worker_fn = {
+        "uringpy": uringpy_worker,
+        "uringpy-app": uringpy_app_worker,
+        "asyncio": asyncio_worker,
+        "asyncio-app": asyncio_app_worker,
+    }[args.engine]
     print(f"[{args.engine}/{args.mode}] starting {args.workers} worker(s)",
           flush=True)
     run(worker_fn, args.workers, args.mode, args.host, args.port)

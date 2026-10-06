@@ -8,6 +8,7 @@ from libc.stdlib cimport malloc, free
 from libc.stdint cimport uint8_t, uint16_t, uint32_t, uint64_t, int32_t, uintptr_t
 from libc.string cimport memset
 from cpython.buffer cimport PyObject_GetBuffer, PyBuffer_Release, PyBUF_SIMPLE
+from cpython.bytes cimport PyBytes_FromStringAndSize
 
 
 cdef class SlabView:
@@ -499,6 +500,131 @@ cdef class URingEngine:
                                 else:
                                     slab_free(self.pool, new_slot)
                     elif op == 3:  # SEND: free the reply slot, re-arm keep-alive recv
+                        if slot_idx >= 0:
+                            slab_free(self.pool, slot_idx)
+                        if res <= 0:
+                            close(fd)
+                        else:
+                            buf = slab_alloc(self.pool, &new_slot)
+                            if buf != NULL:
+                                sqe = io_uring_get_sqe(&self.ring)
+                                if sqe != NULL:
+                                    io_uring_prep_recv(sqe, fd, buf,
+                                                       self.pool.slot_size, 0)
+                                    sqe.user_data = (<uint64_t>2 << 56) \
+                                        | ((<uint64_t>(<uint32_t>fd)) << 24) \
+                                        | (<uint64_t>(new_slot & 0xFFFFFF))
+                                else:
+                                    slab_free(self.pool, new_slot)
+                self.stat_waits += 1
+                io_uring_submit(&self.ring)
+
+    def serve_forever_app(self, object handler, int listen_fd):
+        # Realistic-workload variant: identical reactor, but each RECV crosses
+        # into Python (`with gil`) to run `handler(request_bytes) -> response_bytes`
+        # -- real per-request application work (parsing, logic). This deliberately
+        # reintroduces the interpreter on the hot path, so it measures the BOUNDARY
+        # of the C-reaping benefit: how much the advantage shrinks once genuine
+        # Python work runs per request. Contrast with serve_forever_echo (all C).
+        cdef io_uring_cqe *cqe
+        cdef io_uring_sqe *sqe
+        cdef int ret
+        cdef uint64_t ud
+        cdef int op, fd, res
+        cdef int32_t slot_idx, new_slot
+        cdef void *buf
+        cdef char *reqptr
+        cdef char *dst
+        cdef Py_ssize_t rlen, k
+        cdef object pydata, presp
+        cdef const unsigned char[:] rview
+
+        if handler is None:
+            raise ValueError("serve_forever_app requires a handler")
+
+        sqe = io_uring_get_sqe(&self.ring)
+        if sqe == NULL:
+            raise RuntimeError("Submission queue full at startup")
+        io_uring_prep_accept(sqe, listen_fd, NULL, NULL, 0)
+        sqe.user_data = (<uint64_t>1 << 56) | ((<uint64_t>(<uint32_t>listen_fd)) << 24)
+        io_uring_submit(&self.ring)
+
+        with nogil:
+            while self._stop == 0:
+                ret = io_uring_submit_and_wait(&self.ring, 1)
+                if ret < 0:
+                    break
+                while True:
+                    ret = io_uring_peek_cqe(&self.ring, &cqe)
+                    if ret < 0 or cqe == NULL:
+                        break
+                    ud = cqe.user_data
+                    op = <int>(ud >> 56)
+                    fd = <int>((ud >> 24) & <uint64_t>0xFFFFFFFF)
+                    slot_idx = <int32_t>(ud & <uint64_t>0xFFFFFF)
+                    res = cqe.res
+                    io_uring_cqe_seen(&self.ring, cqe)
+                    self.stat_completions += 1
+
+                    if op == 1:  # ACCEPT: re-arm, start a recv on the new fd
+                        sqe = io_uring_get_sqe(&self.ring)
+                        if sqe != NULL:
+                            io_uring_prep_accept(sqe, listen_fd, NULL, NULL, 0)
+                            sqe.user_data = (<uint64_t>1 << 56) \
+                                | ((<uint64_t>(<uint32_t>listen_fd)) << 24)
+                        if res >= 0:
+                            buf = slab_alloc(self.pool, &new_slot)
+                            if buf != NULL:
+                                sqe = io_uring_get_sqe(&self.ring)
+                                if sqe != NULL:
+                                    io_uring_prep_recv(sqe, res, buf,
+                                                       self.pool.slot_size, 0)
+                                    sqe.user_data = (<uint64_t>2 << 56) \
+                                        | ((<uint64_t>(<uint32_t>res)) << 24) \
+                                        | (<uint64_t>(new_slot & 0xFFFFFF))
+                                else:
+                                    slab_free(self.pool, new_slot)
+                    elif op == 2:  # RECV: run the Python handler, send its reply
+                        if res <= 0:
+                            if slot_idx >= 0:
+                                slab_free(self.pool, slot_idx)
+                            close(fd)
+                        else:
+                            reqptr = <char*>self.pool.raw_memory \
+                                + slot_idx * self.pool.slot_size
+                            with gil:
+                                pydata = PyBytes_FromStringAndSize(reqptr, res)
+                                slab_free(self.pool, slot_idx)
+                                try:
+                                    presp = handler(pydata)
+                                except Exception:
+                                    presp = None
+                                if presp is None:
+                                    close(fd)
+                                else:
+                                    rview = presp
+                                    rlen = rview.shape[0]
+                                    buf = slab_alloc(self.pool, &new_slot)
+                                    if buf != NULL and rlen <= <Py_ssize_t>self.pool.slot_size:
+                                        dst = <char*>buf
+                                        for k in range(rlen):
+                                            dst[k] = rview[k]
+                                        sqe = io_uring_get_sqe(&self.ring)
+                                        if sqe != NULL:
+                                            io_uring_prep_send(sqe, fd, buf,
+                                                               <size_t>rlen, 0)
+                                            sqe.user_data = (<uint64_t>3 << 56) \
+                                                | ((<uint64_t>(<uint32_t>fd)) << 24) \
+                                                | (<uint64_t>(new_slot & 0xFFFFFF))
+                                        else:
+                                            slab_free(self.pool, new_slot)
+                                            close(fd)
+                                    elif buf != NULL:
+                                        slab_free(self.pool, new_slot)
+                                        close(fd)
+                                    else:
+                                        close(fd)
+                    elif op == 3:  # SEND: re-arm keep-alive recv
                         if slot_idx >= 0:
                             slab_free(self.pool, slot_idx)
                         if res <= 0:
