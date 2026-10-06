@@ -48,6 +48,16 @@ A manuscript describing the full methodology and measurements is in preparation.
   measured by the application workload (`--engine uringpy-app`).
 - **Sharding:** N workers, each its own ring + `SO_REUSEPORT` socket; the kernel
   shards connections. No shared mutable state, no cross-worker locks.
+- **Ablation baselines:** `EpollEngine.serve_forever_echo()` is the same C loop
+  on `epoll` (one `recv` and one `send` system call per request), and
+  `benchmarks/sharded_server.py` adds Python-dispatch loops on both interfaces
+  (`py-uring`, `py-epoll`). Together they form a 2×2 design that separates the
+  system-call interface from where the per-event loop runs.
+  `URingEngine.set_max_batch(n)` caps completions per `io_uring_enter` to
+  measure how much batching itself contributes.
+- **Counters:** both C reactors count their system calls and completed
+  requests exactly (`get_stats()`), so system calls per request is measured,
+  not estimated.
 - **Free-threading safe:** the extension declares free-threading compatibility.
 
 ## Requirements
@@ -98,6 +108,38 @@ engine.serve_forever_echo(lst.fileno())  # runs the accept/recv/send loop in C (
 ## Reproduce the benchmarks
 
 Every number comes from a re-runnable script.
+
+### Publication measurements (two machines)
+
+`benchmarks/bench_matrix.py` runs on the client machine and drives the server
+machine over ssh. It measures every cell several times in interleaved, shuffled
+order and writes the raw runs, the machine and software details, and a summary
+with means and 95% confidence intervals to `benchmarks/results/`.
+
+```bash
+# on the server VM: build the image
+docker build -t uringpy:gil .
+
+# on the client VM (needs python3 and wrk)
+export SERVER=user@10.0.0.2 SERVER_IP=10.0.0.2
+python3 benchmarks/bench_matrix.py --experiment scaling     # uringpy vs asyncio, thread vs process
+python3 benchmarks/bench_matrix.py --experiment app         # with a Python handler per request
+python3 benchmarks/bench_matrix.py --experiment factorial   # {io_uring, epoll} x {C loop, Python loop}
+python3 benchmarks/bench_matrix.py --experiment batch       # completions-per-enter cap, 1 .. unlimited
+python3 benchmarks/bench_matrix.py --experiment size        # response size, 64 B .. 1 MiB
+```
+
+Defaults: 5 repetitions of 20 s after a 5 s warm-up, 400 connections; each
+experiment takes roughly 15 to 30 minutes. Add `--image uringpy:gil-ft` for the
+free-threaded build. The `loops` experiment (uvloop, uringcore, uringloop) needs
+the image from `benchmarks/crossruntime/Dockerfile.py313`. The summary flags
+cells where the client was above 85% CPU, since there the load generator, not
+the server, may be the limit.
+
+`python3 benchmarks/bench_matrix.py --experiment scaling --local` runs
+everything on one machine as a smoke test; do not report those numbers.
+
+### Quick single-pass scripts
 
 ```bash
 # Build the container (io_uring needs an unrestricted seccomp profile)

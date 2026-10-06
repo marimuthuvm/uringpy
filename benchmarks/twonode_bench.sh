@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
-# Two-node scaling benchmark (the publication-grade, isolated figure).
+# Two-node scaling benchmark -- quick single-pass look.
+#
+# For numbers that go into the paper use benchmarks/bench_matrix.py instead: it
+# repeats every cell, interleaves the repetitions, and reports means with 95%
+# confidence intervals, latency and CPU use on both machines.
 #
 # Run this ON THE CLIENT VM. It drives the server VM over SSH -- starting a fresh
 # server container per cell, generating load locally with wrk, then stopping the

@@ -134,24 +134,29 @@ cdef extern from "unistd.h" nogil:
 # Module-level inline functions (not methods) so the C compiler inlines them
 # into the reactor loop.
 
-cdef inline io_uring_sqe* _get_sqe(io_uring *ring) noexcept nogil:
+cdef inline io_uring_sqe* _get_sqe(io_uring *ring,
+                                   unsigned long long *enters) noexcept nogil:
     # If the submission queue is full, flush it once and retry instead of
-    # silently dropping the operation.
+    # silently dropping the operation. The flush is an io_uring_enter, so it is
+    # counted in `enters`.
     cdef io_uring_sqe *sqe = io_uring_get_sqe(ring)
     if sqe == NULL:
         io_uring_submit(ring)
+        enters[0] += 1
         sqe = io_uring_get_sqe(ring)
     return sqe
 
 
-cdef inline void _arm_accept(io_uring *ring, int listen_fd) noexcept nogil:
-    cdef io_uring_sqe *sqe = _get_sqe(ring)
+cdef inline void _arm_accept(io_uring *ring, int listen_fd,
+                             unsigned long long *enters) noexcept nogil:
+    cdef io_uring_sqe *sqe = _get_sqe(ring, enters)
     if sqe != NULL:
         io_uring_prep_accept(sqe, listen_fd, NULL, NULL, 0)
         sqe.user_data = (<uint64_t>1 << 56) | ((<uint64_t>(<uint32_t>listen_fd)) << 24)
 
 
-cdef inline void _arm_recv(io_uring *ring, slab_pool_t *pool, int fd) noexcept nogil:
+cdef inline void _arm_recv(io_uring *ring, slab_pool_t *pool, int fd,
+                           unsigned long long *enters) noexcept nogil:
     # Queue a recv into a fresh slab slot. If no slot or SQE is available the
     # connection is closed rather than left open with nothing armed on it.
     cdef int32_t slot = -1
@@ -160,7 +165,7 @@ cdef inline void _arm_recv(io_uring *ring, slab_pool_t *pool, int fd) noexcept n
     if buf == NULL:
         close(fd)
         return
-    sqe = _get_sqe(ring)
+    sqe = _get_sqe(ring, enters)
     if sqe == NULL:
         slab_free(pool, slot)
         close(fd)
@@ -171,11 +176,12 @@ cdef inline void _arm_recv(io_uring *ring, slab_pool_t *pool, int fd) noexcept n
 
 
 cdef inline void _arm_send(io_uring *ring, int fd, const char *base,
-                           size_t total, size_t off) noexcept nogil:
+                           size_t total, size_t off,
+                           unsigned long long *enters) noexcept nogil:
     # Queue a send of base[off:total]. `base` must stay valid until the whole
     # response has been sent; `off` rides in user_data so a short send resumes
     # where it stopped.
-    cdef io_uring_sqe *sqe = _get_sqe(ring)
+    cdef io_uring_sqe *sqe = _get_sqe(ring, enters)
     if sqe == NULL:
         close(fd)
         return
@@ -210,6 +216,12 @@ cdef class URingEngine:
     cdef int _conn_n
     cdef unsigned long long stat_handler_calls
     cdef unsigned long long stat_handler_errors
+    # Reactor-only counters: io_uring_enter calls, responses fully sent, and
+    # close() calls made by the loop.
+    cdef unsigned long long stat_enters
+    cdef unsigned long long stat_requests
+    cdef unsigned long long stat_closes
+    cdef unsigned _max_batch
     def __cinit__(self, unsigned int entries=1024, size_t slot_size=4096, size_t total_slots=1024):
         cdef int ret = io_uring_queue_init(entries, &self.ring, 0)
         if ret < 0:
@@ -237,6 +249,10 @@ cdef class URingEngine:
         self._conn_n = 0
         self.stat_handler_calls = 0
         self.stat_handler_errors = 0
+        self.stat_enters = 0
+        self.stat_requests = 0
+        self.stat_closes = 0
+        self._max_batch = 0
         self.initialized = True
 
     def __dealloc__(self):
@@ -477,13 +493,38 @@ cdef class URingEngine:
         # lower bound on the amortization factor: each blocking get_*events call
         # issues at most one io_uring_enter (and skips it when completions are
         # already ready), yet reaps this many completions on average.
+        #
+        # The C reactors (serve_forever_*) additionally count exactly:
+        #   enters   : io_uring_enter system calls issued by the loop
+        #   requests : responses sent in full
+        #   syscalls : enters + close() calls, i.e. every system call the loop
+        #              made (for comparison with EpollEngine's count)
         cdef double cpw = 0.0
+        cdef double cpe = 0.0
+        cdef double spr = 0.0
+        cdef unsigned long long syscalls = self.stat_enters + self.stat_closes
         if self.stat_waits > 0:
             cpw = <double>self.stat_completions / <double>self.stat_waits
+        if self.stat_enters > 0:
+            cpe = <double>self.stat_completions / <double>self.stat_enters
+        if self.stat_requests > 0:
+            spr = <double>syscalls / <double>self.stat_requests
         return {"waits": self.stat_waits, "completions": self.stat_completions,
                 "submits": self.stat_submits, "completions_per_wait": cpw,
+                "enters": self.stat_enters, "requests": self.stat_requests,
+                "syscalls": syscalls, "completions_per_enter": cpe,
+                "syscalls_per_request": spr,
                 "handler_calls": self.stat_handler_calls,
                 "handler_errors": self.stat_handler_errors}
+
+    def set_max_batch(self, unsigned int n):
+        # Ablation knob for the C reactors: process at most `n` completions per
+        # io_uring_enter (0 = no limit, the default). n=1 forces one system
+        # call per completion, removing syscall amortization while leaving
+        # everything else unchanged.
+        if self._serving:
+            raise RuntimeError("set_max_batch() cannot be called while serving")
+        self._max_batch = n
 
     def _free_slot(self, int slot_idx):
         # Called by SlabView.release() to return a pinned slot to the pool.
@@ -627,19 +668,30 @@ cdef class URingEngine:
         cdef const char *resp = self._echo_resp
         cdef size_t resp_len = self._echo_resp_len
         cdef size_t slot_size = self.pool.slot_size
+        cdef unsigned max_batch = self._max_batch
+        cdef unsigned batch
+        cdef unsigned long long *enters = &self.stat_enters
 
         while self._stop == 0:
+            # The only system call of an iteration: submits everything queued
+            # while draining the previous batch, then waits for >= 1 completion.
             ret = io_uring_submit_and_wait(&self.ring, 1)
+            self.stat_enters += 1
             if ret < 0:
                 if ret == -EINTR:
                     if self._check_signals() < 0:
                         return 0
                     continue
                 return ret
+            self.stat_waits += 1
+            batch = 0
             while True:
+                if max_batch != 0 and batch >= max_batch:
+                    break  # batch cap reached: go back through io_uring_enter
                 ret = io_uring_peek_cqe(&self.ring, &cqe)
                 if ret < 0 or cqe == NULL:
                     break
+                batch += 1
                 ud = cqe.user_data
                 op = <int>(ud >> 56)
                 fd = <int>((ud >> 24) & <uint64_t>0xFFFFFFFF)
@@ -649,13 +701,14 @@ cdef class URingEngine:
                 self.stat_completions += 1
 
                 if op == 1:  # ACCEPT: re-arm, then start a recv on the new fd
-                    _arm_accept(&self.ring, listen_fd)
+                    _arm_accept(&self.ring, listen_fd, enters)
                     if res >= 0:
-                        _arm_recv(&self.ring, self.pool, res)
+                        _arm_recv(&self.ring, self.pool, res, enters)
                 elif op == 2:  # RECV: `low` is the slab slot holding the request
                     if res <= 0:
                         slab_free(self.pool, <int32_t>low)
                         close(fd)
+                        self.stat_closes += 1
                     elif app:
                         rc = self._run_handler(
                             handler, fd,
@@ -663,15 +716,17 @@ cdef class URingEngine:
                         slab_free(self.pool, <int32_t>low)
                         if rc < 0:
                             close(fd)
+                            self.stat_closes += 1
                         else:
                             _arm_send(&self.ring, fd, self._conn_buf[fd],
-                                      self._conn_len[fd], 0)
+                                      self._conn_len[fd], 0, enters)
                     else:
                         slab_free(self.pool, <int32_t>low)
-                        _arm_send(&self.ring, fd, resp, resp_len, 0)
+                        _arm_send(&self.ring, fd, resp, resp_len, 0, enters)
                 elif op == 3:  # SEND: `low` is the offset this send started at
                     if res <= 0:
                         close(fd)
+                        self.stat_closes += 1
                     else:
                         off = low + <size_t>res
                         if app:
@@ -681,11 +736,10 @@ cdef class URingEngine:
                             base = resp
                             total = resp_len
                         if off < total:   # short send: resume
-                            _arm_send(&self.ring, fd, base, total, off)
+                            _arm_send(&self.ring, fd, base, total, off, enters)
                         else:             # done: re-arm keep-alive recv
-                            _arm_recv(&self.ring, self.pool, fd)
-            self.stat_waits += 1
-            io_uring_submit(&self.ring)
+                            self.stat_requests += 1
+                            _arm_recv(&self.ring, self.pool, fd, enters)
         return 0
 
     cdef _run(self, int listen_fd, PyObject *handler):

@@ -1,4 +1,5 @@
-"""End-to-end tests for the C-side reactors (serve_forever_echo / _app).
+"""End-to-end tests for the C reactors: URingEngine.serve_forever_echo / _app
+and the epoll twin EpollEngine.serve_forever_echo.
 
 Each test starts a real engine on a loopback port in a background thread and
 talks to it over plain sockets. Skipped where io_uring is unavailable.
@@ -15,7 +16,7 @@ import time
 
 import pytest
 
-from uringpy import URingEngine
+from uringpy import EpollEngine, URingEngine
 
 
 def _response(body: bytes) -> bytes:
@@ -29,11 +30,17 @@ REQUEST = b"GET /hello HTTP/1.1\r\nHost: x\r\n\r\n"
 class Server:
     """Runs one engine in a thread; stop() wakes it with a throwaway connect."""
 
-    def __init__(self, response=None, handler=None, sndbuf=None):
-        try:
-            self.engine = URingEngine(entries=256, slot_size=4096, total_slots=256)
-        except OSError as e:
-            pytest.skip(f"io_uring unavailable: {e}")
+    def __init__(self, response=None, handler=None, sndbuf=None, kind="uring",
+                 max_batch=0):
+        if kind == "epoll":
+            self.engine = EpollEngine()
+        else:
+            try:
+                self.engine = URingEngine(entries=256, slot_size=4096, total_slots=256)
+            except OSError as e:
+                pytest.skip(f"io_uring unavailable: {e}")
+            if max_batch:
+                self.engine.set_max_batch(max_batch)
         self.listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         if sndbuf:  # inherited by accepted sockets
@@ -91,9 +98,10 @@ def recv_exact(sock, n):
     return b"".join(chunks)
 
 
-def test_echo_keepalive_and_many_connections():
+@pytest.mark.parametrize("kind", ["uring", "epoll"])
+def test_echo_keepalive_and_many_connections(kind):
     resp = _response(b"Hello, world!")
-    with Server(response=resp) as srv:
+    with Server(response=resp, kind=kind) as srv:
         conns = [srv.connect() for _ in range(8)]
         for _ in range(5):  # several requests per connection (keep-alive)
             for c in conns:
@@ -102,6 +110,9 @@ def test_echo_keepalive_and_many_connections():
                 assert recv_exact(c, len(resp)) == resp
         for c in conns:
             c.close()
+        stats = srv.engine.get_stats()
+    assert stats["requests"] == 40
+    assert stats["syscalls"] > 0 and stats["syscalls_per_request"] > 0
 
 
 @pytest.mark.parametrize("size", [1, 4096, 4097, 65536, 1 << 20])
@@ -109,12 +120,62 @@ def test_echo_large_response_is_sent_in_full(size):
     # Responses larger than a slab slot / the socket buffer need several sends.
     body = bytes(i % 251 for i in range(size))
     resp = _response(body)
-    with Server(response=resp) as srv:
+    for kind in ("uring", "epoll"):
+        with Server(response=resp, kind=kind) as srv:
+            c = srv.connect()
+            for _ in range(2):
+                c.sendall(REQUEST)
+                assert recv_exact(c, len(resp)) == resp
+            c.close()
+
+
+def test_epoll_short_sends_are_resumed():
+    resp = _response(bytes(i % 251 for i in range(1 << 20)))
+    with Server(response=resp, kind="epoll", sndbuf=4096) as srv:
         c = srv.connect()
         for _ in range(2):
             c.sendall(REQUEST)
+            time.sleep(0.3)
             assert recv_exact(c, len(resp)) == resp
         c.close()
+        stats = srv.engine.get_stats()
+    assert stats["requests"] == 2
+    # 2 recv + 2 send would be 4 I/O calls; many more means sends were split.
+    assert stats["syscalls"] > 20
+
+
+def _burst(srv, n_conn=16, rounds=20):
+    resp = _response(b"Hello, world!")
+    conns = [srv.connect() for _ in range(n_conn)]
+    for _ in range(rounds):
+        for c in conns:
+            c.sendall(REQUEST)
+        for c in conns:
+            assert recv_exact(c, len(resp)) == resp
+    for c in conns:
+        c.close()
+
+
+def test_one_enter_per_wait_and_exact_counters():
+    with Server(response=_response(b"Hello, world!")) as srv:
+        _burst(srv)
+        st = srv.engine.get_stats()
+    assert st["requests"] == 16 * 20
+    # The loop makes exactly one io_uring_enter per iteration; a blocked wait
+    # that has not returned yet accounts for the possible difference of one.
+    assert st["waits"] <= st["enters"] <= st["waits"] + 1
+    # Every request is a recv completion plus a send completion.
+    assert st["completions"] >= 2 * st["requests"]
+
+
+def test_max_batch_caps_completions_per_enter():
+    with Server(response=_response(b"Hello, world!"), max_batch=1) as srv:
+        _burst(srv)
+        capped = srv.engine.get_stats()
+    assert capped["requests"] == 16 * 20
+    # With a cap of 1, no io_uring_enter may yield more than one completion.
+    assert capped["completions"] <= capped["enters"]
+    assert capped["completions_per_enter"] <= 1.0
 
 
 @pytest.mark.parametrize("app", [False, True])
@@ -135,27 +196,29 @@ def test_short_sends_are_resumed(app):
         assert srv.engine.get_stats()["completions"] > 5
 
 
-def test_signal_handler_runs_while_serving_on_main_thread():
+@pytest.mark.parametrize("kind", ["uring", "epoll"])
+def test_signal_handler_runs_while_serving_on_main_thread(kind):
     # The reactor blocks in C with the GIL released. A Python signal handler
     # must still run (and may raise) when the wait is interrupted -- this is
     # how a process-mode worker is shut down.
     child = textwrap.dedent("""
         import signal, socket, sys
-        from uringpy import URingEngine
+        from uringpy import EpollEngine, URingEngine
         def term(*_):
             sys.exit(7)
         signal.signal(signal.SIGTERM, term)
         lst = socket.socket()
         lst.bind(("127.0.0.1", 0)); lst.listen(8)
         try:
-            eng = URingEngine(entries=64, slot_size=1024, total_slots=64)
+            eng = (EpollEngine() if sys.argv[1] == "epoll" else
+                   URingEngine(entries=64, slot_size=1024, total_slots=64))
         except OSError:
             print("skip", flush=True); sys.exit(0)
         eng.set_response(b"x")
         print("ready", flush=True)
         eng.serve_forever_echo(lst.fileno())
     """)
-    proc = subprocess.Popen([sys.executable, "-c", child], stdout=subprocess.PIPE,
+    proc = subprocess.Popen([sys.executable, "-c", child, kind], stdout=subprocess.PIPE,
                             env=dict(os.environ))
     try:
         line = proc.stdout.readline().strip()
@@ -172,6 +235,8 @@ def test_signal_handler_runs_while_serving_on_main_thread():
 
 
 def test_set_response_rejects_bad_sizes():
+    with pytest.raises(ValueError):
+        EpollEngine().set_response(b"")
     try:
         engine = URingEngine(entries=64, slot_size=1024, total_slots=64)
     except OSError as e:

@@ -1,38 +1,58 @@
 #!/usr/bin/env python3
 """
-Multi-worker sharded HTTP server -- the core artifact for the GIL-aware thesis.
+Multi-worker sharded HTTP server -- the server side of every experiment.
 
 N workers each own a SO_REUSEPORT listener on the same port, so the kernel
-shards connections across workers. Two axes:
+shards connections across workers. All engines reply once per recv() with the
+same bytes, so they differ only in how the I/O loop is built.
 
-  --engine uringpy : each worker drives URingEngine.serve_forever_echo(), which
-                     runs the whole accept/recv/send protocol in a nogil C
-                     region (GIL released for the worker's lifetime).
-  --engine asyncio : each worker runs its own asyncio loop; every completion is
-                     dispatched in Python bytecode.
-  --engine uringpy-app / asyncio-app :
-                     the application workload. Every request is passed to the
-                     same Python handler (app_workload.handle_request). uringpy
-                     runs it via URingEngine.serve_forever_app(), which keeps
-                     accept/recv/send in C and takes the GIL only for the
-                     handler call; asyncio runs it inside its stream handler.
+Engines (--engine):
 
-  --mode thread    : all workers in ONE process/interpreter (shared GIL). This
-                     is where the thesis bites: uringpy scales, asyncio can't.
-  --mode process   : one process per worker (independent GILs) -- the honest
-                     baseline where asyncio DOES scale. The novelty is that
-                     uringpy matches it in a single interpreter with shared
-                     memory, which processes cannot offer.
+  The 2x2 ablation: kernel interface x where the per-event loop runs.
+
+                    | loop in C, GIL released | loop in Python (GIL held)
+    ----------------+-------------------------+--------------------------
+    io_uring        | uringpy                 | py-uring
+    epoll           | c-epoll                 | py-epoll
+
+    uringpy   URingEngine.serve_forever_echo(): whole protocol in one nogil
+              C region.
+    c-epoll   EpollEngine.serve_forever_echo(): the same C loop on epoll, one
+              recv() and one send() system call per request.
+    py-uring  URingEngine.get_events(): io_uring batching, but every
+              completion is dispatched by Python bytecode.
+    py-epoll  select.epoll with a minimal Python loop.
+    (py-uring and py-epoll send each response with a single send, so they are
+    for small responses only.)
+
+  Existing event loops (asyncio streams server, loop implementation swapped):
+    asyncio   stdlib loop          uvloop     libuv-based loop
+    uringcore io_uring loop        uringloop  io_uring loop
+    (the last three are used only if installed in the image)
+
+  Application workload: every request goes through the same Python handler
+  (app_workload.handle_request).
+    uringpy-app  URingEngine.serve_forever_app(): transport in C, GIL taken
+                 only for the handler call.
+    asyncio-app  handler called inside the asyncio stream handler.
+
+Modes (--mode):
+  thread    all workers in ONE process/interpreter (shared GIL).
+  process   one process per worker (independent GILs).
 
 Usage:
     python3 benchmarks/sharded_server.py --engine uringpy --mode thread  --workers 4
     python3 benchmarks/sharded_server.py --engine asyncio --mode process --workers 4
 
-Env: URINGPY_STATS=1 makes each uringpy worker print completions_per_wait on
-     exit.
-     RESP_SIZE=<bytes> sets the response body size (default: the 13-byte
-     "Hello, world!"). The echo engines send a body of exactly that size; the
-     app engines pad the handler's JSON body up to it (see app_workload.py).
+Env:
+  URINGPY_STATS=1        print each worker's counters on exit, one line per
+                         worker: "[worker N] key=value ...".
+  RESP_SIZE=<bytes>      response body size (default: the 13-byte
+                         "Hello, world!"). The echo engines send a body of
+                         exactly that size; the app engines pad the handler's
+                         JSON body up to it (see app_workload.py).
+  URINGPY_MAX_BATCH=<n>  uringpy / uringpy-app only: process at most n
+                         completions per io_uring_enter (0 = unlimited).
 """
 
 from __future__ import annotations
@@ -43,6 +63,7 @@ import signal
 import socket
 import sys
 import threading
+
 
 def _echo_body():
     # RESP_SIZE unset or 13 gives the original b"Hello, world!" byte for byte.
@@ -63,27 +84,38 @@ HTTP_RESPONSE = (
 )
 
 STATS = os.environ.get("URINGPY_STATS", "0") == "1"
+MAX_BATCH = int(os.environ.get("URINGPY_MAX_BATCH") or 0)
 
-# (wid, engine) for every uringpy worker in THIS process, so a shutdown handler
-# can read each ring's completions_per_wait (syscall-amortization evidence).
-_ENGINES = []
+# (wid, get_stats) for every worker in THIS process that keeps counters, so the
+# shutdown handler can print them.
+_STAT_SOURCES = []
+
+
+def _fmt(value):
+    return f"{value:.2f}" if isinstance(value, float) else str(value)
 
 
 def _print_stats():
-    total_w = total_c = 0
-    for wid, engine in _ENGINES:
-        st = engine.get_stats()
-        total_w += st["waits"]
-        total_c += st["completions"]
-        app = ""
-        if st.get("handler_calls"):
-            app = (f" handler_calls={st['handler_calls']}"
-                   f" handler_errors={st['handler_errors']}")
-        print(f"[worker {wid}] completions_per_wait={st['completions_per_wait']:.2f} "
-              f"waits={st['waits']} completions={st['completions']}{app}", flush=True)
-    if total_w:
-        print(f"[all] completions_per_wait={total_c / total_w:.2f} "
-              f"waits={total_w} completions={total_c}", flush=True)
+    for wid, get_stats in _STAT_SOURCES:
+        stats = get_stats()
+        print(f"[worker {wid}] " + " ".join(f"{k}={_fmt(v)}" for k, v in stats.items()),
+              flush=True)
+
+
+def _install_term_handler():
+    # signal.signal() only works in the main thread. In --mode process every
+    # worker IS its process's main thread and installs this itself; in --mode
+    # thread the parent installs it once for the whole process (see run()).
+    if threading.current_thread() is not threading.main_thread():
+        return
+
+    def _term(*_):
+        if STATS:
+            _print_stats()
+        os._exit(0)
+
+    signal.signal(signal.SIGTERM, _term)
+    signal.signal(signal.SIGINT, _term)
 
 
 def make_reuseport_listener(host, port, backlog=1024):
@@ -95,44 +127,180 @@ def make_reuseport_listener(host, port, backlog=1024):
     return sock
 
 
-def uringpy_worker(host, port, wid, app=False):
-    """One uringpy worker: own ring, own SO_REUSEPORT socket, nogil C reactor.
+# --- C reactors ---------------------------------------------------------------
 
-    app=False serves the canned response entirely in C (serve_forever_echo).
-    app=True calls the shared Python handler per request (serve_forever_app).
-    """
+def uringpy_worker(host, port, wid, app=False):
+    """io_uring, loop in C. app=True calls the shared Python handler per request."""
     from uringpy import URingEngine
 
     listener = make_reuseport_listener(host, port)
     engine = URingEngine(entries=8192, slot_size=4096, total_slots=32768)
+    if MAX_BATCH:
+        engine.set_max_batch(MAX_BATCH)
     if app:
         from app_workload import handle_request
     else:
         engine.set_response(HTTP_RESPONSE)
-    _ENGINES.append((wid, engine))
-
-    # signal.signal() only works in the main thread; in --mode thread the parent
-    # installs the handler instead (see run()). get_stats() only reads counters,
-    # so it is safe to call from the handler even while the reactor is blocked.
-    if threading.current_thread() is threading.main_thread():
-        def _term(*_):
-            if STATS:
-                _print_stats()
-            os._exit(0)
-        signal.signal(signal.SIGTERM, _term)
-        signal.signal(signal.SIGINT, _term)
+    _STAT_SOURCES.append((wid, engine.get_stats))
+    _install_term_handler()
     if app:
         engine.serve_forever_app(listener.fileno(), handle_request)
     else:
         engine.serve_forever_echo(listener.fileno())
 
 
-def uringpy_app_worker(host, port, wid):
-    uringpy_worker(host, port, wid, app=True)
+def c_epoll_worker(host, port, wid):
+    """epoll, loop in C: the same reactor as uringpy on the readiness interface."""
+    from uringpy import EpollEngine
+
+    listener = make_reuseport_listener(host, port)
+    engine = EpollEngine()
+    engine.set_response(HTTP_RESPONSE)
+    _STAT_SOURCES.append((wid, engine.get_stats))
+    _install_term_handler()
+    engine.serve_forever_echo(listener.fileno())
 
 
-def asyncio_worker(host, port, wid, app=False):
-    """One asyncio worker: own loop, own SO_REUSEPORT socket.
+# --- Python-dispatch loops ----------------------------------------------------
+
+def py_uring_worker(host, port, wid):
+    """io_uring, loop in Python: completions are batched by the kernel but each
+    one is dispatched by interpreted code."""
+    from uringpy import URingEngine
+
+    ACCEPT, RECV, SEND = 1, 2, 3
+    listener = make_reuseport_listener(host, port)
+    lfd = listener.fileno()
+    # submit_send copies the response into one buffer slot, so it must fit.
+    slot = max(4096, len(HTTP_RESPONSE))
+    engine = URingEngine(entries=8192, slot_size=slot,
+                         total_slots=32768 if slot == 4096 else 2048)
+    counters = {"requests": 0}
+
+    def get_stats():
+        st = engine.get_stats()
+        # get_events issues at most one io_uring_enter per wait and flush()
+        # exactly one, so waits + submits is an upper bound on system calls.
+        syscalls = st["waits"] + st["submits"]
+        req = counters["requests"]
+        return {"completions_per_wait": st["completions_per_wait"],
+                "waits": st["waits"], "completions": st["completions"],
+                "requests": req, "syscalls": syscalls,
+                "syscalls_per_request": (syscalls / req) if req else 0.0}
+
+    _STAT_SOURCES.append((wid, get_stats))
+    _install_term_handler()
+
+    engine.submit_accept(lfd)
+    engine.flush()
+    resp = HTTP_RESPONSE
+    while True:
+        try:
+            events = engine.get_events(max_events=1024, wait=True, copy_data=False)
+        except InterruptedError:
+            continue  # a signal arrived; its handler runs on the next bytecode
+        for op, fd, res, _data in events:
+            if op == ACCEPT:
+                engine.submit_accept(lfd)
+                if res >= 0:
+                    engine.submit_recv(res)
+            elif op == RECV:
+                if res <= 0:
+                    os.close(fd)
+                else:
+                    engine.submit_send(fd, resp)
+            elif op == SEND:
+                if res <= 0:
+                    os.close(fd)
+                else:
+                    counters["requests"] += 1
+                    engine.submit_recv(fd)
+        engine.flush()
+
+
+def py_epoll_worker(host, port, wid):
+    """epoll, loop in Python: a minimal readiness loop, one recv() and one
+    send() per request, all dispatched by interpreted code."""
+    import select
+
+    listener = make_reuseport_listener(host, port)
+    listener.setblocking(False)
+    lfd = listener.fileno()
+    ep = select.epoll()
+    ep.register(lfd, select.EPOLLIN)
+    conns = {}
+    counters = {"requests": 0, "syscalls": 1, "waits": 0, "events": 0}
+
+    def get_stats():
+        req = counters["requests"]
+        out = dict(counters)
+        out["events_per_wait"] = (counters["events"] / counters["waits"]
+                                  if counters["waits"] else 0.0)
+        out["syscalls_per_request"] = (counters["syscalls"] / req) if req else 0.0
+        return out
+
+    _STAT_SOURCES.append((wid, get_stats))
+    _install_term_handler()
+
+    resp = HTTP_RESPONSE
+    while True:
+        events = ep.poll()
+        counters["syscalls"] += 1
+        counters["waits"] += 1
+        counters["events"] += len(events)
+        for fd, _what in events:
+            if fd == lfd:
+                while True:
+                    try:
+                        conn, _addr = listener.accept()
+                        counters["syscalls"] += 1
+                    except BlockingIOError:
+                        counters["syscalls"] += 1
+                        break
+                    conn.setblocking(False)
+                    conns[conn.fileno()] = conn
+                    ep.register(conn.fileno(), select.EPOLLIN)
+                    counters["syscalls"] += 1
+                continue
+            conn = conns.get(fd)
+            if conn is None:
+                continue
+            try:
+                data = conn.recv(4096)
+                counters["syscalls"] += 1
+                if data:
+                    conn.send(resp)
+                    counters["syscalls"] += 1
+                    counters["requests"] += 1
+                    continue
+            except BlockingIOError:
+                continue
+            except OSError:
+                pass
+            del conns[fd]
+            conn.close()  # also removes it from the epoll set
+            counters["syscalls"] += 1
+
+
+# --- asyncio-family event loops -----------------------------------------------
+
+def _new_loop(name):
+    import asyncio
+
+    if name == "uvloop":
+        import uvloop
+        return uvloop.new_event_loop()
+    if name == "uringcore":
+        import uringcore
+        return uringcore.EventLoopPolicy().new_event_loop()
+    if name == "uringloop":
+        from uringloop import URingEventLoop
+        return URingEventLoop()
+    return asyncio.new_event_loop()
+
+
+def asyncio_worker(host, port, wid, app=False, loop_name="asyncio"):
+    """One event-loop worker: own loop, own SO_REUSEPORT socket, asyncio streams.
 
     app=True answers each request with the shared Python handler instead of the
     canned response -- the same handler uringpy-app calls.
@@ -156,7 +324,7 @@ def asyncio_worker(host, port, wid, app=False):
             writer.close()
 
     listener = make_reuseport_listener(host, port)
-    loop = asyncio.new_event_loop()
+    loop = _new_loop(loop_name)
     asyncio.set_event_loop(loop)
     server = loop.run_until_complete(asyncio.start_server(handle, sock=listener))
 
@@ -172,15 +340,23 @@ def asyncio_worker(host, port, wid, app=False):
         loop.close()
 
 
-def asyncio_app_worker(host, port, wid):
-    asyncio_worker(host, port, wid, app=True)
+def _loop_worker(loop_name):
+    def worker(host, port, wid):
+        asyncio_worker(host, port, wid, loop_name=loop_name)
+    return worker
 
 
 WORKERS = {
     "uringpy": uringpy_worker,
+    "c-epoll": c_epoll_worker,
+    "py-uring": py_uring_worker,
+    "py-epoll": py_epoll_worker,
     "asyncio": asyncio_worker,
-    "uringpy-app": uringpy_app_worker,
-    "asyncio-app": asyncio_app_worker,
+    "uvloop": _loop_worker("uvloop"),
+    "uringcore": _loop_worker("uringcore"),
+    "uringloop": _loop_worker("uringloop"),
+    "uringpy-app": lambda host, port, wid: uringpy_worker(host, port, wid, app=True),
+    "asyncio-app": lambda host, port, wid: asyncio_worker(host, port, wid, app=True),
 }
 
 
@@ -218,12 +394,7 @@ def run(worker_fn, workers, mode, host, port):
                    for wid in range(workers)]
         # Workers are non-main threads and cannot install signal handlers, so the
         # main thread handles termination for the whole process.
-        def _term(*_):
-            if STATS:
-                _print_stats()
-            os._exit(0)
-        signal.signal(signal.SIGTERM, _term)
-        signal.signal(signal.SIGINT, _term)
+        _install_term_handler()
         for t in threads:
             t.start()
         print(f"serving on {host}:{port} ({workers} thread workers)", flush=True)
@@ -243,6 +414,17 @@ def main(argv=None):
     args = parser.parse_args(argv)
 
     worker_fn = WORKERS[args.engine]
+    # Fail before starting any worker if this image lacks the engine, rather
+    # than leaving a server with some workers dead.
+    try:
+        if args.engine in ("uvloop", "uringcore", "uringloop"):
+            _new_loop(args.engine).close()
+        elif args.engine == "c-epoll":
+            from uringpy import EpollEngine  # noqa: F401
+        elif args.engine in ("uringpy", "uringpy-app", "py-uring"):
+            from uringpy import URingEngine  # noqa: F401
+    except Exception as exc:
+        sys.exit(f"[{args.engine}] engine unavailable in this environment: {exc!r}")
     print(f"[{args.engine}/{args.mode}] starting {args.workers} worker(s)",
           flush=True)
     run(worker_fn, args.workers, args.mode, args.host, args.port)

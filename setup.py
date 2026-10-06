@@ -8,7 +8,13 @@ extensions = [
         libraries=["uring"],
         extra_compile_args=["-O3", "-march=native"],
         include_dirs=["uringpy"]
-    )
+    ),
+    # Readiness-based twin of the C reactor (ablation baseline); no liburing.
+    Extension(
+        "uringpy.epoll",
+        sources=["uringpy/epoll.pyx"],
+        extra_compile_args=["-O3", "-march=native"],
+    ),
 ]
 
 setup(
