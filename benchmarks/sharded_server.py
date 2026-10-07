@@ -421,7 +421,29 @@ def _new_loop(name):
         return uvloop.new_event_loop()
     if name == "uringcore":
         import uringcore
-        return uringcore.EventLoopPolicy().new_event_loop()
+        # uringcore's loop creates its engine with default settings, and the
+        # default buffer pool runs out ("No buffers available") once a few
+        # hundred connections are open, which ends the loop. The engine has a
+        # buffer_count parameter, but the loop class does not pass one on, so
+        # the constructor the loop calls is wrapped. Set by the run script
+        # through URINGCORE_BUFFER_COUNT; without it nothing is changed.
+        count = int(os.environ.get("URINGCORE_BUFFER_COUNT") or 0)
+        if count:
+            import functools
+            import uringcore.loop as uring_loop
+            if not isinstance(uring_loop.UringCore, functools.partial):
+                uring_loop.UringCore = functools.partial(uring_loop.UringCore,
+                                                         buffer_count=count)
+        loop = uringcore.EventLoopPolicy().new_event_loop()
+        if count and not getattr(_new_loop, "reported", False):
+            _new_loop.reported = True
+            try:
+                stats = loop.get_buffer_stats()
+            except Exception as e:      # the statistics are for the log only
+                stats = f"unavailable ({e})"
+            print(f"[uringcore] buffer_count={count} buffer statistics: {stats}",
+                  file=sys.stderr, flush=True)
+        return loop
     if name == "uringloop":
         import uringloop
         # The class has been published under two names.

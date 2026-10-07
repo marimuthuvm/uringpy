@@ -7,8 +7,10 @@
 %   factorial-uringpy-5db4eabt-20261007T131059Z: 90/90 runs ok, commit 5db4eab, image sha256:1ebee854d3c1
 %   gilbatch-uringpy-5db4eab-20261007T031357Z: 120/120 runs ok, commit 5db4eab, image sha256:afe3a37b1f7d
 %   handler-uringpy-5db4eab-20261007T084113Z: 480/480 runs ok, commit 5db4eab, image sha256:afe3a37b1f7d
+%   handler-uringpy-5db4eab-20261007T194758Z: 180/180 runs ok, commit abf3e7c, image sha256:afe3a37b1f7d
 %   handler-uringpy-5db4eabt-20261007T151318Z: 90/90 runs ok, commit 5db4eab, image sha256:1ebee854d3c1
 %   load-uringpy-5db4eab-20261007T054259Z: 150/200 runs ok, 50 excluded, commit 5db4eab, image sha256:afe3a37b1f7d
+%   load-uringpy-5db4eab-20261007T185514Z: 50/50 runs ok, commit abf3e7c, image sha256:afe3a37b1f7d
 %   scaling-uringpy-5db4eab-20261007T071026Z: 200/200 runs ok, commit 5db4eab, image sha256:afe3a37b1f7d
 %   scaling-uringpy-5db4eabt-20261007T121646Z: 120/120 runs ok, commit 5db4eab, image sha256:1ebee854d3c1
 %   size-uringpy-5db4eab-20261007T160752Z: 60/60 runs ok, commit 5db4eab, image sha256:afe3a37b1f7d
@@ -25,25 +27,30 @@ Engine & Conn. & $\bar{x}_1$ & $\bar{x}_4$ & $S_4$ & $g$ & c.sw. \\
 \code{uringpy} & 16 & 102.4 & 112.8 & 1.10 $\pm$ 0.14$^\dagger$ & 0 & 0.42 \\
  & 64 & 141.9 & 270.1 & 1.90 $\pm$ 0.20$^\dagger$ & 0 & 0.03 \\
  & 400 & 145.6 & 328.9 & 2.26 $\pm$ 0.08 & 0 & 0.00 \\
+ & 1600 & 141.7 & 330.5 & 2.33 $\pm$ 0.06 & 0 & 0.00 \\
 \midrule
 \code{py-uring} & 16 & 92.6 & 88.4 & 0.95 $\pm$ 0.08$^\dagger$ & 1.52 & 0.98 \\
  & 64 & 127.7 & 207.3 & 1.62 $\pm$ 0.05 & 0.31 & 0.17 \\
  & 400 & 132.1 & 295.4 & 2.24 $\pm$ 0.04 & 0.04 & 0.01 \\
+ & 1600 & 127.3 & 299.0 & 2.35 $\pm$ 0.08 & 0.01 & 0.00 \\
 \midrule
 \code{py-epoll} & 16 & 96.3 & 56.6 & 0.59 $\pm$ 0.04 & 2.54 & 2.28 \\
  & 64 & 104.3 & 64.4 & 0.62 $\pm$ 0.03 & 2.08 & 2.17 \\
  & 400 & 105.8 & 67.9 & 0.64 $\pm$ 0.03 & 2.01 & 2.01 \\
+ & 1600 & 103.6 & 66.0 & 0.64 $\pm$ 0.01 & 2.01 & 2.05 \\
 \midrule
 \code{uringpy-app} & 16 & 87.2 & 88.0 & 1.01 $\pm$ 0.09$^\dagger$ & 1.00 & 0.70 \\
  & 64 & 124.4 & 134.9 & 1.08 $\pm$ 0.05 & 1.00 & 0.67 \\
  & 400 & 124.3 & 198.5 & 1.60 $\pm$ 0.13$^\dagger$ & 1.00 & 0.39 \\
+ & 1600 & 119.1 & 184.8 & 1.55 $\pm$ 0.07 & 1.00 & 0.43 \\
 \midrule
 \code{uringpy-app-batch} & 16 & 90.3 & 93.2 & 1.03 $\pm$ 0.04 & 0.60 & 0.69 \\
  & 64 & 118.5 & 194.0 & 1.64 $\pm$ 0.06 & 0.15 & 0.16 \\
  & 400 & 128.7 & 281.4 & 2.19 $\pm$ 0.02 & 0.02 & 0.01 \\
+ & 1600 & 122.0 & 279.5 & 2.29 $\pm$ 0.08 & 0.01 & 0.01 \\
 \bottomrule
 \end{tabular}
 
 \vspace{2pt}
-\parbox{\linewidth}{\footnotesize 50 runs with 1600 connections are not shown: that number exceeded the server's limit on open files (Section~\ref{sec:threats}). $^\dagger$ A configuration in this ratio had a coefficient of variation above 5\%.}
+\parbox{\linewidth}{\footnotesize The rows with 1600 connections were measured in a later run with the server's limit on open files raised; 50 earlier runs, made under a limit below that number of connections, are not shown (Section~\ref{sec:threats}). $^\dagger$ A configuration in this ratio had a coefficient of variation above 5\%.}
 \end{table}

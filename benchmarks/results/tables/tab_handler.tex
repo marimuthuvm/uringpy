@@ -7,8 +7,10 @@
 %   factorial-uringpy-5db4eabt-20261007T131059Z: 90/90 runs ok, commit 5db4eab, image sha256:1ebee854d3c1
 %   gilbatch-uringpy-5db4eab-20261007T031357Z: 120/120 runs ok, commit 5db4eab, image sha256:afe3a37b1f7d
 %   handler-uringpy-5db4eab-20261007T084113Z: 480/480 runs ok, commit 5db4eab, image sha256:afe3a37b1f7d
+%   handler-uringpy-5db4eab-20261007T194758Z: 180/180 runs ok, commit abf3e7c, image sha256:afe3a37b1f7d
 %   handler-uringpy-5db4eabt-20261007T151318Z: 90/90 runs ok, commit 5db4eab, image sha256:1ebee854d3c1
 %   load-uringpy-5db4eab-20261007T054259Z: 150/200 runs ok, 50 excluded, commit 5db4eab, image sha256:afe3a37b1f7d
+%   load-uringpy-5db4eab-20261007T185514Z: 50/50 runs ok, commit abf3e7c, image sha256:afe3a37b1f7d
 %   scaling-uringpy-5db4eab-20261007T071026Z: 200/200 runs ok, commit 5db4eab, image sha256:afe3a37b1f7d
 %   scaling-uringpy-5db4eabt-20261007T121646Z: 120/120 runs ok, commit 5db4eab, image sha256:1ebee854d3c1
 %   size-uringpy-5db4eab-20261007T160752Z: 60/60 runs ok, commit 5db4eab, image sha256:afe3a37b1f7d
@@ -23,6 +25,9 @@
 GIL per & Work & $\bar{x}_1$ & $t_p$ ($\mu$s) & $f$ & bound & $S_2$ & $S_4$ & $S_4^{\mathrm{proc}}$ & $S_4^{\mathrm{ft}}$ & $t_{p,4}$ & $w_4$ & $g$ & $U_4$ \\
 \midrule
 request & 0 & 123.7 $\pm$ 5.4 & 1.18 & 0.15 & 4.00 & 1.55 $\pm$ 0.09 & 1.56 $\pm$ 0.08 & 2.41 $\pm$ 0.05 & 2.39 $\pm$ 0.08 & 2.12 & 7.79 & 1.000 & 0.41 \\
+request & 5 & 115.7 $\pm$ 3.1 & 1.64 & 0.19 & 4.00 & -- & 1.29 $\pm$ 0.04 & 2.38 $\pm$ 0.06 & -- & 2.80 & 12.57 & 1.000 & 0.42 \\
+request & 10 & 109.8 $\pm$ 1.7 & 2.13 & 0.23 & 4.00 & -- & 1.15 $\pm$ 0.03 & 2.48 $\pm$ 0.05 & -- & 3.44 & 16.67 & 1.000 & 0.43 \\
+request & 20 & 99.4 $\pm$ 0.8 & 3.06 & 0.30 & 3.29 & -- & 1.02 $\pm$ 0.02 & 2.51 $\pm$ 0.07 & -- & 4.54 & 22.85 & 1.000 & 0.46 \\
 request & 30 & 92.1 $\pm$ 1.0 & 3.96 & 0.36 & 2.74 & 1.42 $\pm$ 0.03 & 1.01 $\pm$ 0.02 & 2.65 $\pm$ 0.05 & 2.36 $\pm$ 0.06 & 5.32 & 25.73 & 1.000 & 0.50 \\
 request & 100 & 54.8 $\pm$ 3.4 & 11.26 & 0.62 & 1.62 & 1.23 $\pm$ 0.08 & 1.14 $\pm$ 0.07 & 3.10 $\pm$ 0.09 & 1.72 $\pm$ 0.03 & 12.36 & 42.17 & 1.000 & 0.77 \\
 request & 300 & 26.7 $\pm$ 0.4 & 30.46 & 0.81 & 1.23 & 1.06 $\pm$ 0.02 & 1.05 $\pm$ 0.03 & 3.52 $\pm$ 0.08 & 1.26 $\pm$ 0.03 & 32.86 & 101.65 & 1.000 & 0.92 \\
@@ -30,6 +35,9 @@ request & 1000 & 8.71 $\pm$ 0.20 & 105.20 & 0.92 & 1.09 & 1.06 $\pm$ 0.03 & 0.95
 request & 3000 & 3.10 $\pm$ 0.07 & 313.75 & 0.97 & 1.03 & 0.92 $\pm$ 0.13$^\dagger$ & 0.97 $\pm$ 0.03 & 4.00 $\pm$ 0.12 & 1.03 $\pm$ 0.05 & 328.84 & 994.16 & 1.000 & 0.98 \\
 \midrule
 batch & 0 & 128.6 $\pm$ 2.2 & 1.21 & 0.16 & 4.00 & 1.56 $\pm$ 0.03 & 2.16 $\pm$ 0.04 & 2.31 $\pm$ 0.05 & -- & 2.39 & 1.65 & 0.021 & 0.66 \\
+batch & 5 & 119.7 $\pm$ 3.0 & 1.71 & 0.20 & 4.00 & -- & 2.10 $\pm$ 0.06 & 2.37 $\pm$ 0.05 & -- & 3.27 & 2.88 & 0.021 & 0.82 \\
+batch & 10 & 114.0 $\pm$ 2.2 & 2.14 & 0.24 & 4.00 & -- & 2.00 $\pm$ 0.04 & 2.43 $\pm$ 0.03 & -- & 3.85 & 4.62 & 0.021 & 0.88 \\
+batch & 20 & 101.9 $\pm$ 1.1 & 3.11 & 0.32 & 3.16 & -- & 1.77 $\pm$ 0.04 & 2.51 $\pm$ 0.05 & -- & 5.06 & 9.06 & 0.021 & 0.91 \\
 batch & 30 & 95.5 $\pm$ 0.7 & 4.04 & 0.39 & 2.59 & 1.57 $\pm$ 0.07 & 1.64 $\pm$ 0.02 & 2.58 $\pm$ 0.07 & -- & 5.91 & 12.11 & 0.021 & 0.93 \\
 batch & 100 & 57.3 $\pm$ 0.9 & 10.93 & 0.63 & 1.60 & 1.33 $\pm$ 0.04 & 1.28 $\pm$ 0.02 & 3.08 $\pm$ 0.10 & -- & 13.10 & 35.60 & 0.020 & 0.96 \\
 batch & 300 & 26.9 $\pm$ 0.3 & 30.68 & 0.83 & 1.21 & 1.09 $\pm$ 0.03 & 1.03 $\pm$ 0.06 & 3.58 $\pm$ 0.07 & -- & 35.46 & 103.41 & 0.020 & 0.98 \\
@@ -39,5 +47,5 @@ batch & 3000 & 3.07 $\pm$ 0.08 & 317.30 & 0.97 & 1.03 & 0.98 $\pm$ 0.05 & 0.99 $
 \end{tabular}
 
 \vspace{2pt}
-\parbox{\linewidth}{\footnotesize $t_{p,4}$ and $w_4$ in $\mu$s. n/a: with batching and long handlers the interpreter's switch interval interrupts a batch, so the recorded hold includes time waiting to resume. $^\dagger$ A configuration in this ratio had a coefficient of variation above 5\%.}
+\parbox{\linewidth}{\footnotesize $t_{p,4}$ and $w_4$ in $\mu$s. n/a: with batching and long handlers the interpreter's switch interval interrupts a batch, so the recorded hold includes time waiting to resume. The rows without $S_2$ were measured in the supplementary run, at one and four workers. $^\dagger$ A configuration in this ratio had a coefficient of variation above 5\%.}
 \end{table*}

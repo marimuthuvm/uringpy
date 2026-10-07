@@ -746,8 +746,8 @@ LOOP_ENGINES = [("asyncio", "\\code{epoll} (selector loop)"), ("uvloop", "libuv"
 def tab_loops(d):
     """asyncio-compatible event loops under one server script (streams API):
     the standard loop, uvloop and the loops built on io_uring."""
-    present = d.values("loops", "on", "engine")
-    if not any(e in present for e in ("uringcore", "uringloop")):
+    measured = {k[2] for k, c in d.cells.items() if k[0] == "loops" and c.n}
+    if not measured & {"uringcore", "uringloop"}:
         return None         # without an io_uring loop this repeats tab_scaling
     workers = sorted(w for w in d.values("loops", "on", "workers"))
     top = max(workers)
@@ -896,6 +896,9 @@ def tab_handler(d):
         note=("$t_{p,4}$ and $w_4$ in $\\mu$s. n/a: with "
               "batching and long handlers the interpreter's switch interval interrupts a "
               "batch, so the recorded hold includes time waiting to resume."
+              + (" The rows without $S_2$ were measured in the supplementary run, at one and "
+                 "four workers." if any(line.split(" & ")[6:7] == [DASH] for line in body)
+                 else "")
               + (" $^\\dagger$ A configuration in this ratio had a coefficient of variation "
                  "above 5\\%." if dagger else "")))
 
@@ -1484,6 +1487,20 @@ def _meta_numbers(d):
         out["meta:sockerr-max-pct"] = f"{100 * max(b[0] for b in bad):.2f}"
         out["meta:sockerr-experiments"] = ", ".join(sorted({b[1]['experiment'] for b in bad}))
     out["meta:handler-error-runs"] = f"{sum(1 for r in rows if _num(r, 'srv_handler_errors') > 0)}"
+    for exp in sorted({b[1]["experiment"] for b in bad}):
+        out[f"meta:sockerr-runs/{exp}"] = f"{sum(1 for b in bad if b[1]['experiment'] == exp)}"
+    out["meta:sockerr-long-handlers"] = f"{sum(1 for _, r in bad if r['experiment'] == 'handler' and _num(r, 'handler_work') >= 1000)}"
+    long_h = int(out["meta:sockerr-long-handlers"])
+    load_big = sum(1 for _, r in bad if r["experiment"] == "load")
+    out["meta:sockerr-other-rest"] = f"{len(bad) - long_h - load_big}"
+    out.setdefault("meta:sockerr-runs/load", "0")
+    # Failed runs by engine, for the sentence that reports them.
+    failed = {}
+    for k, c in d.cells.items():
+        if c.failed:
+            failed[k[2]] = failed.get(k[2], 0) + c.failed
+    for engine, n in failed.items():
+        out[f"meta:failed/{engine}"] = f"{n}"
     # Socket-error runs outside the two longest handlers of the handler sweep.
     out["meta:sockerr-other"] = f"{sum(1 for _, r in bad if not (r['experiment'] == 'handler' and _num(r, 'handler_work') >= 1000))}"
     served = [v for f in d.folders for v in f.get("excluded_served", [])]

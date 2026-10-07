@@ -7,8 +7,10 @@
 %   factorial-uringpy-5db4eabt-20261007T131059Z: 90/90 runs ok, commit 5db4eab, image sha256:1ebee854d3c1
 %   gilbatch-uringpy-5db4eab-20261007T031357Z: 120/120 runs ok, commit 5db4eab, image sha256:afe3a37b1f7d
 %   handler-uringpy-5db4eab-20261007T084113Z: 480/480 runs ok, commit 5db4eab, image sha256:afe3a37b1f7d
+%   handler-uringpy-5db4eab-20261007T194758Z: 180/180 runs ok, commit abf3e7c, image sha256:afe3a37b1f7d
 %   handler-uringpy-5db4eabt-20261007T151318Z: 90/90 runs ok, commit 5db4eab, image sha256:1ebee854d3c1
 %   load-uringpy-5db4eab-20261007T054259Z: 150/200 runs ok, 50 excluded, commit 5db4eab, image sha256:afe3a37b1f7d
+%   load-uringpy-5db4eab-20261007T185514Z: 50/50 runs ok, commit abf3e7c, image sha256:afe3a37b1f7d
 %   scaling-uringpy-5db4eab-20261007T071026Z: 200/200 runs ok, commit 5db4eab, image sha256:afe3a37b1f7d
 %   scaling-uringpy-5db4eabt-20261007T121646Z: 120/120 runs ok, commit 5db4eab, image sha256:1ebee854d3c1
 %   size-uringpy-5db4eab-20261007T160752Z: 60/60 runs ok, commit 5db4eab, image sha256:afe3a37b1f7d
@@ -21,26 +23,26 @@
 \begin{tikzpicture}
 \begin{groupplot}[group style={group size=2 by 1, horizontal sep=16mm}, tick label style={font=\scriptsize}, label style={font=\footnotesize}, legend style={font=\scriptsize, draw=black!25, cells={anchor=west}, row sep=-1.5pt, inner sep=2pt}, grid=major, grid style={black!8}, axis line style={black!55}, tick style={black!55}, every axis plot/.append style={line width=0.8pt, mark size=1.9pt}, width=0.46\textwidth, height=60mm, xmode=log, xmin=1, xmax=1000, xlabel={GIL hold time per request $t_p$ ($\mu$s), one worker}]
 \nextgroupplot[title={\footnotesize (a) scaling at four workers}, ymin=0, ymax=4.3, ylabel={scaling $S_4$}, legend columns=1, legend style={at={(0.5,-0.27)}, anchor=north, font=\scriptsize, draw=black!25, cells={anchor=west}, column sep=4pt, row sep=-1.5pt, inner sep=2pt}]
-\addplot[ink, line width=0.6pt] coordinates {(1.181,4) (3.9633,2.741) (11.261,1.621) (30.459,1.228) (105.2,1.091) (313.75,1.029)};
+\addplot[ink, line width=0.6pt] coordinates {(1.181,4) (1.6428,4) (2.1258,4) (3.0608,3.286) (3.9633,2.741) (11.261,1.621) (30.459,1.228) (105.2,1.091) (313.75,1.029)};
 \addlegendentry{bound $\min(4, 1/f)$}
-\addplot[sA, mark=*, mark options={fill=sA}, error bars/.cd, y dir=both, y explicit, error bar style={line width=0.4pt}, error mark options={rotate=90, mark size=1.5pt, line width=0.4pt}] coordinates {(1.181,1.5594) +- (0,0.0824) (3.9633,1.011) +- (0,0.01733) (11.261,1.1388) +- (0,0.07091) (30.459,1.0473) +- (0,0.02677) (105.2,0.94628) +- (0,0.0321) (313.75,0.96516) +- (0,0.03391)};
+\addplot[sA, mark=*, mark options={fill=sA}, error bars/.cd, y dir=both, y explicit, error bar style={line width=0.4pt}, error mark options={rotate=90, mark size=1.5pt, line width=0.4pt}] coordinates {(1.181,1.5594) +- (0,0.0824) (1.6428,1.2941) +- (0,0.04264) (2.1258,1.1455) +- (0,0.02691) (3.0608,1.0162) +- (0,0.0237) (3.9633,1.011) +- (0,0.01733) (11.261,1.1388) +- (0,0.07091) (30.459,1.0473) +- (0,0.02677) (105.2,0.94628) +- (0,0.0321) (313.75,0.96516) +- (0,0.03391)};
 \addlegendentry{threads, GIL per request}
-\addplot[sB, mark=square*, mark options={fill=sB}, error bars/.cd, y dir=both, y explicit, error bar style={line width=0.4pt}, error mark options={rotate=90, mark size=1.5pt, line width=0.4pt}] coordinates {(1.181,2.1629) +- (0,0.0413) (3.9633,1.6404) +- (0,0.02409) (11.261,1.28) +- (0,0.02184) (30.459,1.0305) +- (0,0.05767) (105.2,0.99922) +- (0,0.03055) (313.75,0.9912) +- (0,0.02708)};
+\addplot[sB, mark=square*, mark options={fill=sB}, error bars/.cd, y dir=both, y explicit, error bar style={line width=0.4pt}, error mark options={rotate=90, mark size=1.5pt, line width=0.4pt}] coordinates {(1.181,2.1629) +- (0,0.0413) (1.6428,2.1043) +- (0,0.06205) (2.1258,1.9966) +- (0,0.04342) (3.0608,1.7738) +- (0,0.04473) (3.9633,1.6404) +- (0,0.02409) (11.261,1.28) +- (0,0.02184) (30.459,1.0305) +- (0,0.05767) (105.2,0.99922) +- (0,0.03055) (313.75,0.9912) +- (0,0.02708)};
 \addlegendentry{threads, GIL per batch}
-\addplot[sC, densely dashed, mark=triangle, mark options={solid}, mark size=2.4pt, error bars/.cd, y dir=both, y explicit, error bar style={line width=0.4pt}, error mark options={rotate=90, mark size=1.5pt, line width=0.4pt}] coordinates {(1.181,2.4126) +- (0,0.04631) (3.9633,2.6505) +- (0,0.04728) (11.261,3.0991) +- (0,0.09137) (30.459,3.523) +- (0,0.08454) (105.2,3.904) +- (0,0.1366) (313.75,3.9955) +- (0,0.1234)};
+\addplot[sC, densely dashed, mark=triangle, mark options={solid}, mark size=2.4pt, error bars/.cd, y dir=both, y explicit, error bar style={line width=0.4pt}, error mark options={rotate=90, mark size=1.5pt, line width=0.4pt}] coordinates {(1.181,2.4126) +- (0,0.04631) (1.6428,2.3784) +- (0,0.05562) (2.1258,2.4808) +- (0,0.05207) (3.0608,2.5078) +- (0,0.06739) (3.9633,2.6505) +- (0,0.04728) (11.261,3.0991) +- (0,0.09137) (30.459,3.523) +- (0,0.08454) (105.2,3.904) +- (0,0.1366) (313.75,3.9955) +- (0,0.1234)};
 \addlegendentry{processes}
 \addplot[ink, densely dotted, mark=diamond, mark options={solid}, mark size=2.4pt, error bars/.cd, y dir=both, y explicit, error bar style={line width=0.4pt}, error mark options={rotate=90, mark size=1.5pt, line width=0.4pt}] coordinates {(1.181,2.3886) +- (0,0.07889) (3.9633,2.359) +- (0,0.06228) (11.261,1.7169) +- (0,0.02764) (30.459,1.2649) +- (0,0.02886) (105.2,1.1143) +- (0,0.04353) (313.75,1.0327) +- (0,0.04871)};
 \addlegendentry{threads, free-threaded}
 \nextgroupplot[title={\footnotesize (b) throughput at four workers}, ymode=log, ylabel={thousand requests per second}, legend columns=1, legend style={at={(0.5,-0.27)}, anchor=north, font=\scriptsize, draw=black!25, cells={anchor=west}, column sep=4pt, row sep=-1.5pt, inner sep=2pt}]
-\addplot[sA, mark=*, mark options={fill=sA}] coordinates {(1.181,192.97) (3.9633,93.067) (11.261,62.402) (30.459,27.998) (105.2,8.2444) (313.75,2.9886)};
+\addplot[sA, mark=*, mark options={fill=sA}] coordinates {(1.181,192.97) (1.6428,149.76) (2.1258,125.8) (3.0608,101.03) (3.9633,93.067) (11.261,62.402) (30.459,27.998) (105.2,8.2444) (313.75,2.9886)};
 \addlegendentry{\code{uringpy} threads, GIL per request}
-\addplot[sB, mark=square*, mark options={fill=sB}] coordinates {(1.181,278.19) (3.9633,156.74) (11.261,73.352) (30.459,27.71) (105.2,8.8329) (313.75,3.0418)};
+\addplot[sB, mark=square*, mark options={fill=sB}] coordinates {(1.181,278.19) (1.6428,251.84) (2.1258,227.57) (3.0608,180.69) (3.9633,156.74) (11.261,73.352) (30.459,27.71) (105.2,8.8329) (313.75,3.0418)};
 \addlegendentry{\code{uringpy} threads, GIL per batch}
-\addplot[sA, densely dashed, mark=o, mark options={solid}] coordinates {(1.181,293.82) (3.9633,242.7) (11.261,173.56) (30.459,93.427) (105.2,34.625) (313.75,12.408)};
+\addplot[sA, densely dashed, mark=o, mark options={solid}] coordinates {(1.181,293.82) (1.6428,281.1) (2.1258,271.64) (3.0608,252.3) (3.9633,242.7) (11.261,173.56) (30.459,93.427) (105.2,34.625) (313.75,12.408)};
 \addlegendentry{\code{uringpy} processes}
-\addplot[sC, densely dashed, mark=triangle, mark options={solid}, mark size=2.4pt] coordinates {(1.181,219.03) (3.9633,184.41) (11.261,137.53) (30.459,81.298) (105.2,32.502) (313.75,12.011)};
+\addplot[sC, densely dashed, mark=triangle, mark options={solid}, mark size=2.4pt] coordinates {(1.181,219.03) (1.6428,209.96) (2.1258,203.35) (3.0608,191.59) (3.9633,184.41) (11.261,137.53) (30.459,81.298) (105.2,32.502) (313.75,12.011)};
 \addlegendentry{\code{uvloop} processes (Protocol API)}
-\addplot[ink, densely dashed, mark=diamond, mark options={solid}, mark size=2.4pt] coordinates {(1.181,180.08) (3.9633,156.15) (11.261,112.02) (30.459,70.322) (105.2,31.109) (313.75,11.899)};
+\addplot[ink, densely dashed, mark=diamond, mark options={solid}, mark size=2.4pt] coordinates {(1.181,180.08) (1.6428,177.56) (2.1258,167.56) (3.0608,154.03) (3.9633,156.15) (11.261,112.02) (30.459,70.322) (105.2,31.109) (313.75,11.899)};
 \addlegendentry{\code{asyncio} processes (Protocol API)}
 \end{groupplot}
 \end{tikzpicture}

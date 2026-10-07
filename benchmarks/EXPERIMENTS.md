@@ -131,6 +131,22 @@ limits of the main run are on record too.
 of the main run (rule `EXCLUSIONS`: 1600 connections without a raised
 open-file limit).
 
+Outcome. The first and the third expectation held (`tab_load`, `tab_handler`).
+The `loops` stage did not measure `uringcore`: with the limit on locked memory
+raised it started and answered single requests, but all 30 of its runs failed.
+With its default buffer pool it raises `RuntimeError: No buffers available`
+once a few hundred connections are open, the error ends its event loop, and
+the server process exits. Those runs are kept under
+`benchmarks/results/superseded/`.
+
+`bash benchmarks/run_loops_experiment.sh` is the third attempt. It gives
+`uringcore` a larger buffer pool through the `buffer_count` parameter of its
+engine (`URINGCORE_BUFFER_COUNT`, 4096 by default; see `_new_loop` in
+`sharded_server.py`), keeps both raised limits, and before measuring checks
+that the loop serves 400 connections in four short trial runs. The expectation
+for `uringcore` in the table above was written before any of its runs
+succeeded and applies unchanged.
+
 The 2x2 design of `factorial`:
 
 | | loop in C, GIL released | loop in Python, GIL held |

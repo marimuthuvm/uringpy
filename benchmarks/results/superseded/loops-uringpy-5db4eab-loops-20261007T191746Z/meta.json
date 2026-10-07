@@ -1,0 +1,200 @@
+{
+  "experiment": "loops",
+  "started_utc": "2026-10-07T19:17:46+00:00",
+  "params": {
+    "reps": 5,
+    "duration": 20,
+    "warmup": 5,
+    "conns": 400,
+    "threads": 8,
+    "seed": 1679897733,
+    "port": 8080,
+    "url": "http://10.142.0.2:8080/",
+    "docker_opts": "--ulimit nofile=65536:65536 --ulimit memlock=-1:-1"
+  },
+  "cells": [
+    [
+      "asyncio",
+      "thread",
+      1,
+      13,
+      0,
+      0,
+      400
+    ],
+    [
+      "asyncio",
+      "thread",
+      2,
+      13,
+      0,
+      0,
+      400
+    ],
+    [
+      "asyncio",
+      "thread",
+      4,
+      13,
+      0,
+      0,
+      400
+    ],
+    [
+      "asyncio",
+      "process",
+      1,
+      13,
+      0,
+      0,
+      400
+    ],
+    [
+      "asyncio",
+      "process",
+      2,
+      13,
+      0,
+      0,
+      400
+    ],
+    [
+      "asyncio",
+      "process",
+      4,
+      13,
+      0,
+      0,
+      400
+    ],
+    [
+      "uvloop",
+      "thread",
+      1,
+      13,
+      0,
+      0,
+      400
+    ],
+    [
+      "uvloop",
+      "thread",
+      2,
+      13,
+      0,
+      0,
+      400
+    ],
+    [
+      "uvloop",
+      "thread",
+      4,
+      13,
+      0,
+      0,
+      400
+    ],
+    [
+      "uvloop",
+      "process",
+      1,
+      13,
+      0,
+      0,
+      400
+    ],
+    [
+      "uvloop",
+      "process",
+      2,
+      13,
+      0,
+      0,
+      400
+    ],
+    [
+      "uvloop",
+      "process",
+      4,
+      13,
+      0,
+      0,
+      400
+    ],
+    [
+      "uringcore",
+      "thread",
+      1,
+      13,
+      0,
+      0,
+      400
+    ],
+    [
+      "uringcore",
+      "thread",
+      2,
+      13,
+      0,
+      0,
+      400
+    ],
+    [
+      "uringcore",
+      "thread",
+      4,
+      13,
+      0,
+      0,
+      400
+    ],
+    [
+      "uringcore",
+      "process",
+      1,
+      13,
+      0,
+      0,
+      400
+    ],
+    [
+      "uringcore",
+      "process",
+      2,
+      13,
+      0,
+      0,
+      400
+    ],
+    [
+      "uringcore",
+      "process",
+      4,
+      13,
+      0,
+      0,
+      400
+    ]
+  ],
+  "client": {
+    "kernel": "7.0.0-1011-gcp",
+    "nproc": 8,
+    "python": "3.12.3",
+    "cpu_model": "AMD EPYC 7B13",
+    "machine_type": "t2d-standard-8",
+    "wrk": "wrk debian/4.1.0-4build2 [epoll] Copyright (C) 2012 Will Glozer",
+    "git_commit": "abf3e7cabcb7bc323243b6af821ca5dbafcd1010",
+    "git_dirty": false
+  },
+  "server": {
+    "target": "marimuthu_vm@10.142.0.2",
+    "image": "uringpy:5db4eab-loops",
+    "kernel": "7.0.0-1011-gcp",
+    "nproc": "4",
+    "cpu_model": "AMD EPYC 7B13",
+    "machine_type": "t2d-standard-4",
+    "image_id": "sha256:822ea4852f4805fcbcb75179dc9d1e35c0c90672f409b03e3967d2aa0bb47519",
+    "interpreter": "3.14.7 gil_on"
+  },
+  "finished_utc": "2026-10-07T19:47:57+00:00"
+}
