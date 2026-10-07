@@ -4,15 +4,16 @@
 """
 GIL-crossing probe for the completion-reaping bottleneck study.
 
-Hypothesis under test
----------------------
-Once io_uring amortizes system calls (this project already measures ~199
-completions per io_uring_enter), the residual bottleneck for a Python async
-runtime is the work performed on the hot path *while holding the GIL* -- i.e.
-GIL contention, not syscall count. A runtime that reaps and decodes completions
-in C (GIL released) should then scale with cores, whereas one that dispatches
-each completion through the interpreter (GIL held) collapses under multi-thread
-contention.
+What the probe shows
+--------------------
+The two extremes of the cost model in EXPERIMENTS.md: a loop that holds the
+GIL for all of its work (f = 1) shares the lock with every competing thread,
+and a loop that has released it (f = 0) is not slowed by them. It was written
+for an earlier, broader hypothesis ("the loop must be in C to scale"), which
+the server experiments did not support: what decides thread scaling there is
+how often the GIL changes hands, and a loop in Python can scale. The probe
+makes no system call and has no hand-offs to count, so it says nothing about
+either; it remains as the illustration of f = 1 against f = 0.
 
 The C path (`reactor_nogil`) reaps the whole batch inside one `nogil` region.
 The status-quo path is a genuine *interpreted* Python loop and therefore lives

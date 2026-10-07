@@ -620,9 +620,10 @@ cdef class URingEngine:
         slab_free(self.pool, slot_idx)
 
     # --- GIL-aware C-side reactors ------------------------------------------
-    # Instead of returning per-event Python objects (which force the interpreter
-    # -- and the GIL -- onto the hot path of every completion), _serve drives the
-    # whole accept/recv/send protocol inside one nogil region.
+    # _serve drives the whole accept/recv/send protocol inside one nogil
+    # region, so a worker thread takes the GIL only where it calls the handler
+    # (never, for the echo reactor). What this buys worker threads is few GIL
+    # hand-offs per request; see benchmarks/EXPERIMENTS.md.
     #
     #   serve_forever_echo : every request gets the canned set_response() bytes.
     #                        Python is never touched per event, so N worker

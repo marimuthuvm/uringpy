@@ -11,9 +11,11 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "benchmarks"))
 import make_tables as mt  # noqa: E402
 
 FIELDS = ["experiment", "engine", "mode", "workers", "resp_size", "max_batch", "handler_work",
-          "status", "rps", "lat_p99_ms", "server_cpu_pct", "client_cpu_pct", "srv_requests",
-          "srv_syscalls", "srv_enters", "srv_completions", "srv_gil", "transfer_mb_s",
-          "srv_handler_calls", "srv_gil_hold_ns", "srv_gil_wait_ns", "srv_gil_acquires"]
+          "conns", "status", "rps", "requests", "lat_p50_ms", "lat_p99_ms", "server_cpu_pct",
+          "client_cpu_pct", "socket_errors", "srv_requests", "srv_syscalls", "srv_enters",
+          "srv_completions", "srv_gil", "transfer_mb_s", "srv_handler_calls",
+          "srv_gil_hold_ns", "srv_gil_wait_ns", "srv_gil_acquires", "srv_gil_releases",
+          "srv_nvcsw"]
 
 
 def write_folder(root, name, experiment, interpreter, rows, nproc=4):
@@ -21,7 +23,7 @@ def write_folder(root, name, experiment, interpreter, rows, nproc=4):
     d.mkdir()
     (d / "meta.json").write_text(json.dumps(
         {"experiment": experiment, "server": {"interpreter": interpreter, "nproc": str(nproc)},
-         "client": {"git_commit": "abcdef0123"}}))
+         "client": {"git_commit": "abcdef0123"}, "params": {"duration": 20, "warmup": 5}}))
     with open(d / "runs.csv", "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=FIELDS)
         w.writeheader()
@@ -109,3 +111,94 @@ def test_handler_table_derives_f_and_bound(tmp_path):
     # at four threads: hold 12 us, wait 30 us, 0.25 acquisitions per call,
     # GIL utilisation 12 us * 80k req/s = 0.96
     assert row.rstrip(" \\").endswith("& 12.00 & 30.00 & 0.250 & 0.96")
+
+
+def test_handoffs_and_context_switches_per_request(tmp_path):
+    def cell(engine, workers, rps, **extra):
+        return [{"engine": engine, "mode": "thread", "workers": workers, "rps": v,
+                 "srv_gil": "on", **extra} for v in (rps, rps)]
+    rows = (
+        # loop in Python: 2 GIL releases and 2 context switches per request
+        cell("py-epoll", 1, 100e3, srv_requests=1000, srv_syscalls=2000, srv_gil_releases=2000,
+             srv_nvcsw=10)
+        + cell("py-epoll", 4, 60e3, srv_requests=1000, srv_syscalls=2000, srv_gil_releases=2000,
+               srv_nvcsw=2000)
+        # the control: same system calls, 1 release per 50 requests
+        + cell("py-epoll-batch", 1, 120e3, srv_requests=1000, srv_syscalls=2000,
+               srv_gil_releases=20, srv_nvcsw=10)
+        + cell("py-epoll-batch", 4, 288e3, srv_requests=1000, srv_syscalls=2000,
+               srv_gil_releases=20, srv_nvcsw=5)
+        # a C reactor without a handler never takes the GIL
+        + cell("uringpy", 1, 140e3, srv_requests=1000, srv_syscalls=10)
+        + cell("uringpy", 4, 322e3, srv_requests=1000, srv_syscalls=20)
+        # a runtime that does not count its requests: 25 s of life at 40k req/s
+        + cell("asyncio", 4, 40e3, srv_nvcsw=2_000_000))
+    write_folder(tmp_path, "factorial-a", "factorial", "3.14.7 gil_on", rows)
+    d = mt.Data(*mt.load(str(tmp_path)), results_dir=str(tmp_path))
+    slow = d.get("factorial", "on", "py-epoll", "thread", 4)
+    fast = d.get("factorial", "on", "py-epoll-batch", "thread", 4)
+    assert slow.handoffs == 2.0 and fast.handoffs == 0.02
+    assert slow.syscalls_per_request == fast.syscalls_per_request == 2.0
+    assert slow.csw == 2.0 and fast.csw == 0.005
+    assert d.get("factorial", "on", "uringpy", "thread", 4).handoffs == 0.0
+    base = d.get("factorial", "on", "asyncio", "thread", 4)
+    assert base.handoffs != base.handoffs                    # nan: not counted
+    assert base.csw == 2_000_000 / (40e3 * 25)               # estimated from wrk's count
+
+    tex = mt.tab_factorial(d)
+    row = next(line for line in tex.splitlines() if line.startswith("\\code{py-epoll-batch}"))
+    assert "2.40 $\\pm$" in row and "& 2.000 & 0.020 & 0.005 &" in row
+    effects = mt.tab_effects(d)
+    assert "Hand-offs (" in effects and "4.80 $\\pm$" in effects   # 288k over 60k
+
+    values = mt.numbers(d)
+    assert values["S:factorial/g/py-epoll-batch/thread/4"] == "2.40"
+    assert values["ho:factorial/g/py-epoll/thread/4"] == "2.000"
+    assert values["x:factorial/g/uringpy/thread/4"] == "322.0"
+    assert values["r:handoff-epoll/4"] == "4.80"
+    assert values["meta:runs"] == "14" and values["meta:failed"] == "0"
+    assert "\\@namedef{v@r:handoff-epoll/4}{4.80}" in mt.numbers_tex(values)
+
+    fig = mt.fig_handoffs(d)
+    assert "\\label{fig:handoffs}" in fig and "(0.02,2.4)" in fig and "(2,0.6)" in fig
+
+    paper = tmp_path / "paper.tex"
+    paper.write_text("a $\\V{S:factorial/g/py-epoll/thread/4}$ b \\V{no:such/key}")
+    assert mt.check_keys(str(paper), values) == ["no:such/key"]
+
+
+def test_gilbatch_and_load_tables(tmp_path):
+    def cell(exp, engine, workers, rps, conns=400, **extra):
+        return [{"experiment": exp, "engine": engine, "mode": "thread", "workers": workers,
+                 "rps": v, "srv_gil": "on", "conns": conns, **extra} for v in (rps, rps)]
+    rows = []
+    for engine, acq, x4 in (("uringpy-app", 1000, 190e3), ("uringpy-app-batch1", 1000, 190e3),
+                            ("uringpy-app-batch4", 250, 240e3), ("uringpy-app-batch", 20, 270e3)):
+        rows += cell("gilbatch", engine, 1, 125e3, srv_handler_calls=1000, srv_gil_acquires=1000)
+        rows += cell("gilbatch", engine, 4, x4, srv_handler_calls=1000, srv_gil_acquires=acq,
+                     srv_gil_hold_ns=2_000_000, srv_gil_wait_ns=8_000_000,
+                     srv_requests=1000, srv_nvcsw=acq)
+    write_folder(tmp_path, "gilbatch-a", "gilbatch", "3.14.7 gil_on",
+                 [dict(r) for r in rows])
+    load = []
+    for conns in (16, 400):
+        load += cell("load", "py-epoll", 1, 100e3, conns, srv_requests=1000, srv_gil_releases=2000)
+        load += cell("load", "py-epoll", 4, 50e3 if conns == 400 else 120e3, conns,
+                     srv_requests=1000, srv_gil_releases=2000)
+    write_folder(tmp_path, "load-a", "load", "3.14.7 gil_on", load)
+    d = mt.Data(*mt.load(str(tmp_path)), results_dir=str(tmp_path))
+
+    tex = mt.tab_gilbatch(d)
+    rows = [line for line in tex.splitlines() if " & " in line and "\\\\" in line][1:]
+    assert [r.split(" & ")[0] for r in rows] == ["---", "1", "4", "none"]
+    assert [r.split(" & ")[1] for r in rows] == ["1.000", "1.000", "0.250", "0.020"]
+    assert "2.16 $\\pm$" in rows[-1]                 # 270k over 125k
+    # hold 2 us at 270k req/s: the GIL is in use for 54% of each second
+    assert "& 2.00 & 8.00 & 0.54 & 0.020" in rows[-1]
+
+    tex = mt.tab_load(d)
+    assert "\\code{py-epoll} & 16 &" in tex and " & 400 & " in tex
+    assert "1.20 $\\pm$" in tex and "0.50 $\\pm$" in tex
+    values = mt.numbers(d)
+    assert values["S:load/g/py-epoll/thread/4/c16"] == "1.20"
+    assert values["S:load/g/py-epoll/thread/4"] == "0.50"

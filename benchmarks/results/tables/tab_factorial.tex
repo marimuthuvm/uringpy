@@ -13,24 +13,24 @@
 %   scaling-uringpy-314t-20261006T131651Z: 120/120 runs ok, commit b60fe24, image sha256:3602f9e5eda6
 %   size-uringpy-314r-20261006T221543Z: 60/60 runs ok, commit d9bc686, image sha256:197cfae00203
 \begin{table*}[t]
-\caption{The $2{\times}2$ design (worker threads, GIL build, 13-byte body): throughput in thousands of requests per second (mean $\pm$ 95\% half-width, $n=5$), scaling, measured system calls per request at one and four workers, busy server cores and 99th-percentile latency at four workers.}
+\caption{The $2{\times}2$ design and two controls (worker threads, GIL build, 13-byte body): throughput in thousands of requests per second (mean $\pm$ 95\% half-width, $n=5$) at $N$ workers; scaling of worker threads $S_4$ and of worker processes $S_4^{\mathrm{proc}}$; and, at four worker threads, per request: measured system calls (sys), GIL hand-offs ($g$) and voluntary context switches (c.sw.); busy server cores $C_4$; and 99th-percentile latency in ms.}
 \label{tab:factorial}
 \centering
 \footnotesize
-\setlength{\tabcolsep}{3pt}
-\begin{tabular}{@{}lllrrrrrrrrr@{}}
+\setlength{\tabcolsep}{2pt}
+\begin{tabular}{@{}lllrrrrrrrrrr@{}}
 \toprule
-Engine & Interface & Loop & $N{=}1$ & $N{=}2$ & $N{=}4$ & $S_2$ & $S_4$ & sys/req$_1$ & sys/req$_4$ & $C_4$ & p99$_4$ (ms) \\
+Engine & Interface & Loop & $N{=}1$ & $N{=}2$ & $N{=}4$ & $S_4$ & $S_4^{\mathrm{proc}}$ & sys & $g$ & c.sw. & $C_4$ & p99$_4$ \\
 \midrule
-\code{uringpy} & \code{io\_uring} & C & 140.3 $\pm$ 4.3 & 230.6 $\pm$ 6.9 & 329.0 $\pm$ 0.8 & 1.64 $\pm$ 0.07 & 2.34 $\pm$ 0.07 & 0.006 & 0.022 & 3.92 & 1.8 \\
-\code{c-epoll} & \code{epoll} & C & 123.4 $\pm$ 2.9 & 200.5 $\pm$ 3.8 & 297.7 $\pm$ 0.8 & 1.62 $\pm$ 0.05 & 2.41 $\pm$ 0.06 & 2.004 & 2.014 & 3.92 & 2.8 \\
-\code{py-uring} & \code{io\_uring} & Python & 133.5 $\pm$ 2.6 & 212.4 $\pm$ 2.9 & 295.1 $\pm$ 0.7 & 1.59 $\pm$ 0.04 & 2.21 $\pm$ 0.04 & 0.011 & 0.042 & 3.81 & 1.9 \\
-\code{py-epoll} & \code{epoll} & Python & 106.8 $\pm$ 1.8 & 141.6 $\pm$ 2.7 & 68.1 $\pm$ 0.9 & 1.32 $\pm$ 0.03 & 0.64 $\pm$ 0.01 & 2.004 & 2.012 & 2.46 & 11.5 \\
+\code{uringpy} & \code{io\_uring} & C & 140.3 $\pm$ 4.3 & 230.6 $\pm$ 6.9 & 329.0 $\pm$ 0.8 & 2.34 $\pm$ 0.07 & -- & 0.022 & 0 & -- & 3.92 & 1.8 \\
+\code{c-epoll} & \code{epoll} & C & 123.4 $\pm$ 2.9 & 200.5 $\pm$ 3.8 & 297.7 $\pm$ 0.8 & 2.41 $\pm$ 0.06 & -- & 2.014 & 0 & -- & 3.92 & 2.8 \\
+\code{py-uring} & \code{io\_uring} & Python & 133.5 $\pm$ 2.6 & 212.4 $\pm$ 2.9 & 295.1 $\pm$ 0.7 & 2.21 $\pm$ 0.04 & -- & 0.042 & 0.042 & -- & 3.81 & 1.9 \\
+\code{py-epoll} & \code{epoll} & Python & 106.8 $\pm$ 1.8 & 141.6 $\pm$ 2.7 & 68.1 $\pm$ 0.9 & 0.64 $\pm$ 0.01 & -- & 2.012 & 2.012 & -- & 2.46 & 11.5 \\
 \midrule
-\code{py-uring-held} & \code{io\_uring} & Python$^\ddagger$ & 131.5 $\pm$ 3.6 & 129.1 $\pm$ 2.8 & 128.6 $\pm$ 2.3 & 0.98 $\pm$ 0.03 & 0.98 $\pm$ 0.03 & 0.011 & 0.040 & 1.51 & 783.7 \\
+\code{py-uring-held}$^\ddagger$ & \code{io\_uring} & Python & 131.5 $\pm$ 3.6 & 129.1 $\pm$ 2.8 & 128.6 $\pm$ 2.3 & 0.98 $\pm$ 0.03 & -- & 0.040 & -- & -- & 1.51 & 783.7 \\
 \bottomrule
 \end{tabular}
 
 \vspace{2pt}
-\parbox{\linewidth}{\footnotesize $^\ddagger$ \code{py-uring} holding the GIL during the submitting system call; shown for comparison and not part of the $2{\times}2$ design.}
+\parbox{\linewidth}{\footnotesize The upper four rows are the design; the lower rows are controls that differ from one cell in one respect. $^\ddagger$ \code{py-uring} holding the GIL during the submitting system call.}
 \end{table*}

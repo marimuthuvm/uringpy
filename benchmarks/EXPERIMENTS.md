@@ -5,34 +5,42 @@ paper comes from one experiment below, run by `benchmarks/bench_matrix.py`, and
 every reported number is computed by the formulas in the last section. The raw
 per-run data for each table is kept under `benchmarks/results/`.
 
-## The claim under test
+## The claim under test, and how it changed
 
-> For a Python `io_uring` server, where the per-event loop runs (in C with the
-> GIL released, or in Python with it held) matters more than which system-call
-> interface is used.
+> Under the GIL, whether worker threads of one interpreter scale is decided by
+> how much of a request runs with the GIL held and by how often the GIL changes
+> hands per request. The system-call interface and the language of the loop
+> matter to scaling only through those two.
 
-The criterion below was written down on the day of the measurements, while the
-`factorial` runs were in progress; the commit that records it is later than
-those runs, so it is not a pre-registered test:
+This is not the claim the work started from. The order of events:
 
-- **Supported** if, in the `factorial` experiment, moving the loop from Python to
-  C changes throughput far more than switching between `epoll` and `io_uring`,
-  **and** in the `batch` experiment, capping the completions handled per
-  `io_uring_enter` changes throughput little.
-- **Not supported** otherwise; the paper then reports what the data shows.
+1. **A broader hypothesis.** "For a Python `io_uring` server, where the
+   per-event loop runs (in C with the GIL released, or in Python with it held)
+   matters more than which system-call interface is used." Its criterion was
+   written down on the day of the first measurements, while the `factorial` runs
+   were in progress, so it was not pre-registered: supported if moving the loop
+   from Python to C changes throughput far more than switching between `epoll`
+   and `io_uring`, and capping the completions handled per `io_uring_enter`
+   changes throughput little.
+2. **A wrong conclusion.** In the first `factorial` run the Python loop on
+   `io_uring` did not scale across threads, and we concluded that a loop in
+   Python cannot scale. The loop held the GIL during its submitting system call,
+   in which the kernel performs the queued sends; nothing required that. Those
+   runs are kept under `benchmarks/results/superseded/`, and the faulty variant
+   is kept as the engine `py-uring-held`.
+3. **The criterion is not met.** With the GIL released around that call, the
+   Python loop on `io_uring` scales nearly as well as the C loop. At one worker
+   the interface and the placement of the loop matter about equally. The claim
+   at the top of this section was formulated after seeing these results.
+4. **Tests of the new claim.** Three experiments were then designed to test it:
+   `py-epoll-batch` (GIL releases reduced with the interface and the system
+   calls unchanged), `c-epoll-app-batch` (GIL batching on an `epoll` reactor),
+   and `gilbatch` (requests per GIL acquisition varied in steps). The prediction
+   for the first, and what would refute it, is written under "Experiments"
+   below, in the commit at which all current results were measured.
 
-Outcome: not met. With one worker the two factors matter about equally
-(interface 1.14-1.25x, loop 1.05-1.15x). With four worker threads a Python loop
-on `io_uring` scales nearly as well as the C loop (2.21x against 2.34x) once it
-releases the GIL around its submitting call, so loop placement does not decide
-scaling either. The batch condition holds only for caps of 16 and above.
-
-What the data supports was formulated after seeing the results: thread scaling
-under the GIL is governed by how much of a request runs under the GIL and by how
-often the GIL changes hands per request; batching matters to threads because it
-batches those hand-offs. An earlier run of `factorial`, in which `py-uring` held
-the GIL while submitting, appeared to show that Python loops cannot scale; it is
-kept under `benchmarks/results/superseded/`.
+The numbers are in the generated tables (`benchmarks/results/tables/`) and in
+the paper; none is repeated here by hand.
 
 ## Setup
 
@@ -327,8 +335,9 @@ What is not handled is listed under Limits and stated in the paper.
   `send`, so they are used only with small responses.
 - One protocol, one kernel, one machine family, and a server with few cores.
 - The server's four cores are shared by the workers and the kernel's network
-  stack: one worker already keeps about 1.2 cores busy, so scaling at four
-  workers is about 2.1 to 2.7 for every engine that scales at all.
+  stack: one worker already keeps more than one core busy, so scaling at four
+  workers stays well below 4 for every engine, in process mode too. The tables
+  report busy cores and throughput per busy core next to scaling.
 - With response bodies of 16 KiB or more the network path (about 15.7 Gbit/s
   between the two machines) was the limit, not the server; those `size` cells
   measure the network.

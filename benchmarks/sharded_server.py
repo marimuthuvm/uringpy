@@ -423,8 +423,11 @@ def _new_loop(name):
         import uringcore
         return uringcore.EventLoopPolicy().new_event_loop()
     if name == "uringloop":
-        from uringloop import URingEventLoop
-        return URingEventLoop()
+        import uringloop
+        # The class has been published under two names.
+        factory = (getattr(uringloop, "IoUringProactorEventLoop", None)
+                   or getattr(uringloop, "URingEventLoop"))
+        return factory()
     return asyncio.new_event_loop()
 
 
