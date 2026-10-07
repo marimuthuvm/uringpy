@@ -1,0 +1,62 @@
+# Control for the handler sweep: benchmarks/handler_thread_control.py inside
+# each image on the server machine, 20000 calls per thread, commit 5db4eab.
+== uringpy:5db4eab HANDLER_WORK=0
+python 3.14.7 gil_enabled=1 HANDLER_WORK=0
+1 threads: us per call 0.9  calls per s 1090154
+2 threads: us per call 1.3  calls per s 1076319
+4 threads: us per call 2.3  calls per s 1077723
+== uringpy:5db4eab HANDLER_WORK=30
+python 3.14.7 gil_enabled=1 HANDLER_WORK=30
+1 threads: us per call 3.7  calls per s 272385
+2 threads: us per call 7.0  calls per s 275299
+4 threads: us per call 11.8  calls per s 270671
+== uringpy:5db4eab HANDLER_WORK=100
+python 3.14.7 gil_enabled=1 HANDLER_WORK=100
+1 threads: us per call 10.4  calls per s 95757
+2 threads: us per call 20.7  calls per s 94239
+4 threads: us per call 37.3  calls per s 94424
+== uringpy:5db4eab HANDLER_WORK=300
+python 3.14.7 gil_enabled=1 HANDLER_WORK=300
+1 threads: us per call 29.7  calls per s 33673
+2 threads: us per call 60.8  calls per s 32683
+4 threads: us per call 102.6  calls per s 32590
+== uringpy:5db4eab HANDLER_WORK=1000
+python 3.14.7 gil_enabled=1 HANDLER_WORK=1000
+1 threads: us per call 101.3  calls per s 9870
+2 threads: us per call 208.0  calls per s 9598
+4 threads: us per call 359.6  calls per s 9566
+== uringpy:5db4eab HANDLER_WORK=3000
+python 3.14.7 gil_enabled=1 HANDLER_WORK=3000
+1 threads: us per call 309.7  calls per s 3229
+2 threads: us per call 631.8  calls per s 3160
+4 threads: us per call 1181.3  calls per s 3179
+== uringpy:5db4eabt HANDLER_WORK=0
+python 3.14.7 gil_enabled=0 HANDLER_WORK=0
+1 threads: us per call 0.9  calls per s 1028512
+2 threads: us per call 1.1  calls per s 1783632
+4 threads: us per call 1.3  calls per s 2987151
+== uringpy:5db4eabt HANDLER_WORK=30
+python 3.14.7 gil_enabled=0 HANDLER_WORK=30
+1 threads: us per call 4.1  calls per s 242393
+2 threads: us per call 5.7  calls per s 347531
+4 threads: us per call 17.0  calls per s 231589
+== uringpy:5db4eabt HANDLER_WORK=100
+python 3.14.7 gil_enabled=0 HANDLER_WORK=100
+1 threads: us per call 12.0  calls per s 82910
+2 threads: us per call 16.4  calls per s 118859
+4 threads: us per call 58.2  calls per s 65788
+== uringpy:5db4eabt HANDLER_WORK=300
+python 3.14.7 gil_enabled=0 HANDLER_WORK=300
+1 threads: us per call 34.0  calls per s 29407
+2 threads: us per call 50.2  calls per s 39282
+4 threads: us per call 181.4  calls per s 21716
+== uringpy:5db4eabt HANDLER_WORK=1000
+python 3.14.7 gil_enabled=0 HANDLER_WORK=1000
+1 threads: us per call 115.9  calls per s 8626
+2 threads: us per call 162.6  calls per s 12196
+4 threads: us per call 615.4  calls per s 6487
+== uringpy:5db4eabt HANDLER_WORK=3000
+python 3.14.7 gil_enabled=0 HANDLER_WORK=3000
+1 threads: us per call 346.2  calls per s 2888
+2 threads: us per call 492.2  calls per s 3985
+4 threads: us per call 1863.1  calls per s 2137

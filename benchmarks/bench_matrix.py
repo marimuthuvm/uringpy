@@ -335,8 +335,11 @@ class Remote:
 
     NAME = "uringpy-srv"
 
-    def __init__(self, target, image, port):
+    def __init__(self, target, image, port, docker_opts=""):
         self.target, self.image, self.port = target, image, port
+        # Extra `docker run` options for the server container, e.g. resource
+        # limits; only the server container gets them.
+        self.docker_opts = " ".join(shlex.quote(o) for o in shlex.split(docker_opts or ""))
         self.ssh = ["ssh", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=accept-new",
                     target]
 
@@ -347,7 +350,8 @@ class Remote:
         envs = " ".join(f"-e {k}={shlex.quote(str(v))}" for k, v in env.items())
         self.run(f"docker rm -f {self.NAME} >/dev/null 2>&1; "
                  f"docker run -d --name {self.NAME} --network host "
-                 f"--security-opt seccomp=unconfined {envs} {shlex.quote(self.image)} "
+                 f"--security-opt seccomp=unconfined {self.docker_opts} {envs} "
+                 f"{shlex.quote(self.image)} "
                  f"python3 benchmarks/sharded_server.py --engine {engine} --mode {mode} "
                  f"--workers {workers} --host 0.0.0.0 --port {self.port} >/dev/null")
 
@@ -717,6 +721,9 @@ def main(argv=None):
     ap.add_argument("--server-ip", default=os.environ.get("SERVER_IP"),
                     help="server address reachable from this client [$SERVER_IP]")
     ap.add_argument("--image", default=os.environ.get("IMAGE", "uringpy:gil"))
+    ap.add_argument("--docker-opts", default=os.environ.get("DOCKER_OPTS", ""),
+                    help="extra `docker run` options for the server container, recorded "
+                         "in meta.json, e.g. \"--ulimit nofile=65536:65536\" [$DOCKER_OPTS]")
     ap.add_argument("--port", type=int, default=int(os.environ.get("PORT", 8080)))
     ap.add_argument("--reps", type=int, default=5)
     ap.add_argument("--duration", type=int, default=20, help="seconds per measured run")
@@ -762,7 +769,7 @@ def main(argv=None):
     else:
         if not args.server or not args.server_ip:
             ap.error("give --server and --server-ip (or SERVER / SERVER_IP), or --local")
-        server = Remote(args.server, args.image, args.port)
+        server = Remote(args.server, args.image, args.port, args.docker_opts)
         url = f"http://{args.server_ip}:{args.port}/"
         code, out = server.run("docker --version")
         if code != 0:
@@ -791,7 +798,8 @@ def main(argv=None):
     meta = {"experiment": args.experiment, "started_utc": started.isoformat(timespec="seconds"),
             "params": {"reps": args.reps, "duration": args.duration, "warmup": args.warmup,
                        "conns": args.conns, "threads": args.threads, "seed": seed,
-                       "port": args.port, "url": url},
+                       "port": args.port, "url": url,
+                       "docker_opts": "" if args.local else args.docker_opts},
             "cells": [list(c) for c in cells],
             "client": describe_client(args.wrk), "server": server.describe()}
     with open(os.path.join(out_dir, "meta.json"), "w") as f:

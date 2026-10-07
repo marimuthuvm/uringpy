@@ -18,12 +18,15 @@ FIELDS = ["experiment", "engine", "mode", "workers", "resp_size", "max_batch", "
           "srv_nvcsw"]
 
 
-def write_folder(root, name, experiment, interpreter, rows, nproc=4):
+def write_folder(root, name, experiment, interpreter, rows, nproc=4, docker_opts="",
+                 image="uringpy:abcdef0", driver="abcdef0123", day="2026-10-07"):
     d = root / name
     d.mkdir()
     (d / "meta.json").write_text(json.dumps(
-        {"experiment": experiment, "server": {"interpreter": interpreter, "nproc": str(nproc)},
-         "client": {"git_commit": "abcdef0123"}, "params": {"duration": 20, "warmup": 5}}))
+        {"experiment": experiment, "started_utc": day + "T01:00:00+00:00",
+         "server": {"interpreter": interpreter, "nproc": str(nproc), "image": image},
+         "client": {"git_commit": driver},
+         "params": {"duration": 20, "warmup": 5, "docker_opts": docker_opts}}))
     with open(d / "runs.csv", "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=FIELDS)
         w.writeheader()
@@ -148,8 +151,10 @@ def test_handoffs_and_context_switches_per_request(tmp_path):
     tex = mt.tab_factorial(d)
     row = next(line for line in tex.splitlines() if line.startswith("\\code{py-epoll-batch}"))
     assert "2.40 $\\pm$" in row and "& 2.000 & 0.020 & 0.005 &" in row
+    assert "mathrm{ft}" not in tex                 # no free-threaded runs, no such column
+    assert all(line.count(" & ") == 11 for line in tex.splitlines() if line.startswith("\\code"))
     effects = mt.tab_effects(d)
-    assert "Hand-offs (" in effects and "4.80 $\\pm$" in effects   # 288k over 60k
+    assert "GIL releases (" in effects and "4.80 $\\pm$" in effects   # 288k over 60k
 
     values = mt.numbers(d)
     assert values["S:factorial/g/py-epoll-batch/thread/4"] == "2.40"
@@ -159,12 +164,32 @@ def test_handoffs_and_context_switches_per_request(tmp_path):
     assert values["meta:runs"] == "14" and values["meta:failed"] == "0"
     assert "\\@namedef{v@r:handoff-epoll/4}{4.80}" in mt.numbers_tex(values)
 
+    # the figure plots scaling against context switches per request
     fig = mt.fig_handoffs(d)
-    assert "\\label{fig:handoffs}" in fig and "(0.02,2.4)" in fig and "(2,0.6)" in fig
+    assert "\\label{fig:handoffs}" in fig and "(0.005,2.4)" in fig and "(2,0.6)" in fig
 
     paper = tmp_path / "paper.tex"
     paper.write_text("a $\\V{S:factorial/g/py-epoll/thread/4}$ b \\V{no:such/key}")
     assert mt.check_keys(str(paper), values) == ["no:such/key"]
+
+    # the README block is generated from the same runs and spliced between markers
+    block = mt.headline_md(d)
+    assert "`py-epoll-batch`) | 2.00 | 0.020 | 0.005 | 288.0 ± <0.1 | 2.40× | n/a |" in block
+    assert block.startswith(mt.README_START) and block.rstrip().endswith(mt.README_END)
+    readme = tmp_path / "README.md"
+    readme.write_text("intro\n" + mt.README_START + "\nold\n" + mt.README_END + "\ntail\n")
+    assert mt.splice_readme(str(readme), block) is True
+    text = readme.read_text()
+    assert text.startswith("intro\n" + mt.README_START) and text.endswith(mt.README_END + "\ntail\n")
+    assert "old" not in text and mt.splice_readme(str(readme), block) is False
+
+    # with runs of the free-threaded build the table gains their scaling
+    free = [dict(r, srv_gil="off") for r in cell("py-epoll", 1, 100e3) + cell("py-epoll", 4, 230e3)]
+    write_folder(tmp_path, "factorial-b", "factorial", "3.14.7 gil_OFF", free)
+    d = mt.Data(*mt.load(str(tmp_path)), results_dir=str(tmp_path))
+    tex = mt.tab_factorial(d)
+    row = next(line for line in tex.splitlines() if line.startswith("\\code{py-epoll} "))
+    assert "S_4^{\\mathrm{ft}}" in tex and "& 2.30 $\\pm$" in row and row.count(" & ") == 12
 
 
 def test_gilbatch_and_load_tables(tmp_path):
@@ -185,6 +210,10 @@ def test_gilbatch_and_load_tables(tmp_path):
         load += cell("load", "py-epoll", 1, 100e3, conns, srv_requests=1000, srv_gil_releases=2000)
         load += cell("load", "py-epoll", 4, 50e3 if conns == 400 else 120e3, conns,
                      srv_requests=1000, srv_gil_releases=2000)
+    # more connections than the server could hold open: kept on disk, left out
+    load += cell("load", "py-epoll", 1, 90e3, 1600)
+    load += [{"experiment": "load", "engine": "py-epoll", "mode": "thread", "workers": 4,
+              "rps": "", "conns": 1600, "status": "no-start"}]
     write_folder(tmp_path, "load-a", "load", "3.14.7 gil_on", load)
     d = mt.Data(*mt.load(str(tmp_path)), results_dir=str(tmp_path))
 
@@ -199,6 +228,56 @@ def test_gilbatch_and_load_tables(tmp_path):
     tex = mt.tab_load(d)
     assert "\\code{py-epoll} & 16 &" in tex and " & 400 & " in tex
     assert "1.20 $\\pm$" in tex and "0.50 $\\pm$" in tex
+    assert " & 1600 & " not in tex and "3 runs with 1600 connections are not shown" in tex
     values = mt.numbers(d)
     assert values["S:load/g/py-epoll/thread/4/c16"] == "1.20"
     assert values["S:load/g/py-epoll/thread/4"] == "0.50"
+    assert not any(key.endswith("/c1600") for key in values)
+    assert values["meta:excluded-runs"] == "3" and values["meta:excluded-failed"] == "1"
+    assert values["meta:failed"] == "0"
+    assert values["meta:runs"] == "24" and values["meta:runs-made"] == "27"
+
+
+def test_runs_made_later_with_raised_container_limits(tmp_path):
+    def cell(exp, engine, mode, workers, rps, conns=400, **extra):
+        return [{"experiment": exp, "engine": engine, "mode": mode, "workers": workers,
+                 "rps": v, "srv_gil": "on", "conns": conns, **extra} for v in (rps, rps)]
+    # the main run: 1600 connections under the default limit are left out
+    main = (cell("load", "uringpy", "thread", 1, 140e3) + cell("load", "uringpy", "thread", 4, 320e3)
+            + cell("load", "uringpy", "thread", 1, 130e3, 1600)
+            + cell("load", "uringpy", "thread", 4, 150e3, 1600))
+    write_folder(tmp_path, "load-a", "load", "3.14.7 gil_on", main)
+    # the later run: the same cells with the open-file limit raised are kept
+    later = (cell("load", "uringpy", "thread", 1, 100e3, 1600)
+             + cell("load", "uringpy", "thread", 4, 250e3, 1600))
+    write_folder(tmp_path, "load-b", "load", "3.14.7 gil_on", later, driver="1234567890",
+                 docker_opts="--ulimit nofile=65536:65536 --ulimit memlock=-1:-1",
+                 day="2026-10-08")
+    loops = []
+    for engine, x1, x4 in (("asyncio", 60e3, 30e3), ("uringcore", 80e3, 120e3)):
+        loops += cell("loops", engine, "thread", 1, x1, srv_nvcsw=10)
+        loops += cell("loops", engine, "thread", 4, x4, srv_nvcsw=int(x4 * 25))
+    write_folder(tmp_path, "loops-b", "loops", "3.14.7 gil_on", loops, driver="1234567890",
+                 image="uringpy:abcdef0-loops", docker_opts="--ulimit memlock=-1:-1")
+    d = mt.Data(*mt.load(str(tmp_path)), results_dir=str(tmp_path))
+
+    c = d.get("load", "on", "uringpy", "thread", 4, conns=1600)
+    assert c.n == 2 and c.mean == 250e3                      # only the later runs
+    tex = mt.tab_load(d)
+    assert " & 1600 & " in tex and "2.50 $\\pm$" in tex
+    assert "4 earlier runs" in tex and "limit on open files raised" in tex
+    values = mt.numbers(d)
+    assert values["meta:excluded-runs"] == "4" and values["S:load/g/uringpy/thread/4/c1600"] == "2.50"
+    # the server code is the image's commit; the later driver commit is listed apart
+    assert values["meta:commits"] == "abcdef0"
+    assert values["meta:supplement-commits"] == "1234567" and values["meta:days"] == "2"
+
+    tex = mt.tab_loops(d)
+    row = next(line for line in tex.splitlines() if line.startswith("\\code{uringcore}"))
+    assert "1.50 $\\pm$" in row and "& 1.000 &" in row       # one switch per request
+    point, = mt._handoff_points(d)["uring_loops"]            # and a point of the figure
+    assert point[:2] == (1.0, 1.5) and point[3] == "\\code{uringcore}"
+    # without an io_uring loop the table would only repeat the scaling table
+    other = tmp_path / "x"
+    other.mkdir()
+    assert mt.tab_loops(make_results(other)) is None

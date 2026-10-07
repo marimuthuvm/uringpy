@@ -1,0 +1,145 @@
+{
+  "experiment": "size",
+  "started_utc": "2026-10-07T16:07:52+00:00",
+  "params": {
+    "reps": 5,
+    "duration": 20,
+    "warmup": 5,
+    "conns": 400,
+    "threads": 8,
+    "seed": 1308849493,
+    "port": 8080,
+    "url": "http://10.142.0.2:8080/"
+  },
+  "cells": [
+    [
+      "uringpy",
+      "process",
+      4,
+      64,
+      0,
+      0,
+      400
+    ],
+    [
+      "uringpy",
+      "process",
+      4,
+      1024,
+      0,
+      0,
+      400
+    ],
+    [
+      "uringpy",
+      "process",
+      4,
+      16384,
+      0,
+      0,
+      400
+    ],
+    [
+      "uringpy",
+      "process",
+      4,
+      65536,
+      0,
+      0,
+      400
+    ],
+    [
+      "uringpy",
+      "process",
+      4,
+      262144,
+      0,
+      0,
+      400
+    ],
+    [
+      "uringpy",
+      "process",
+      4,
+      1048576,
+      0,
+      0,
+      400
+    ],
+    [
+      "asyncio-proto",
+      "process",
+      4,
+      64,
+      0,
+      0,
+      400
+    ],
+    [
+      "asyncio-proto",
+      "process",
+      4,
+      1024,
+      0,
+      0,
+      400
+    ],
+    [
+      "asyncio-proto",
+      "process",
+      4,
+      16384,
+      0,
+      0,
+      400
+    ],
+    [
+      "asyncio-proto",
+      "process",
+      4,
+      65536,
+      0,
+      0,
+      400
+    ],
+    [
+      "asyncio-proto",
+      "process",
+      4,
+      262144,
+      0,
+      0,
+      400
+    ],
+    [
+      "asyncio-proto",
+      "process",
+      4,
+      1048576,
+      0,
+      0,
+      400
+    ]
+  ],
+  "client": {
+    "kernel": "7.0.0-1011-gcp",
+    "nproc": 8,
+    "python": "3.12.3",
+    "cpu_model": "AMD EPYC 7B13",
+    "machine_type": "t2d-standard-8",
+    "wrk": "wrk debian/4.1.0-4build2 [epoll] Copyright (C) 2012 Will Glozer",
+    "git_commit": "5db4eabd22b51785388d775ccc9761e09562057d",
+    "git_dirty": false
+  },
+  "server": {
+    "target": "marimuthu_vm@10.142.0.2",
+    "image": "uringpy:5db4eab",
+    "kernel": "7.0.0-1011-gcp",
+    "nproc": "4",
+    "cpu_model": "AMD EPYC 7B13",
+    "machine_type": "t2d-standard-4",
+    "image_id": "sha256:afe3a37b1f7d64884ed7050e57b37acb630a7a1c2631c695c0443d4d9adf4a8e",
+    "interpreter": "3.14.7 gil_on"
+  },
+  "finished_utc": "2026-10-07T16:35:13+00:00"
+}
