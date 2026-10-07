@@ -13,19 +13,20 @@
 %   scaling-uringpy-314t-20261006T131651Z: 120/120 runs ok, commit b60fe24, image sha256:3602f9e5eda6
 %   size-uringpy-314r-20261006T221543Z: 60/60 runs ok, commit d9bc686, image sha256:197cfae00203
 \begin{table}[t]
-\caption{Effect of each factor with the other held fixed, as a ratio of mean throughputs ($\pm$ 95\% half-width) from Table~\ref{tab:factorial}. Interface: \code{io\_uring} over \code{epoll}. Loop: C over Python.}
-\label{tab:effects}
+\caption{Contention probe: time in seconds to process a fixed number of events while $K$ threads compete for the GIL, as mean (standard deviation) over 20 repetitions, with the slowdown relative to $K=0$ computed from the means and from the fastest repetition (min).}
+\label{tab:probe}
 \centering
 \footnotesize
 \setlength{\tabcolsep}{3pt}
-\begin{tabular}{@{}lrrr@{}}
+\begin{tabular}{@{}rrrrrrr@{}}
 \toprule
-Effect & $N{=}1$ & $N{=}2$ & $N{=}4$ \\
+& \multicolumn{3}{c}{Python loop} & \multicolumn{3}{c}{C \code{nogil} loop} \\
+$K$ & time (sd) & mean & min & time (sd) & mean & min \\
 \midrule
-Interface, loop in C & 1.14 $\pm$ 0.04 & 1.15 $\pm$ 0.04 & 1.11 $\pm$ $<$0.01 \\
-Interface, loop in Python & 1.25 $\pm$ 0.03 & 1.50 $\pm$ 0.03 & 4.33 $\pm$ 0.06 \\
-Loop, on \code{io\_uring} & 1.05 $\pm$ 0.04 & 1.09 $\pm$ 0.04 & 1.11 $\pm$ $<$0.01 \\
-Loop, on \code{epoll} & 1.15 $\pm$ 0.03 & 1.42 $\pm$ 0.04 & 4.37 $\pm$ 0.06 \\
+0 & 0.251 (0.001) & 1.00 & 1.00 & 0.250 (0.000) & 1.00 & 1.00 \\
+1 & 0.512 (0.003) & 2.04 & 2.03 & 0.255 (0.000) & 1.02 & 1.02 \\
+2 & 0.866 (0.278) & 3.46 & 2.09 & 0.413 (0.166) & 1.65 & 1.00 \\
+3 & 1.137 (0.588) & 4.54 & 2.17 & 0.394 (0.086) & 1.58 & 1.03 \\
 \bottomrule
 \end{tabular}
 \end{table}

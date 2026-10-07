@@ -16,7 +16,7 @@ import time
 
 import pytest
 
-from uringpy import EpollEngine, URingEngine
+from uringpy import BatchIO, EpollEngine, URingEngine
 
 
 def _response(body: bytes) -> bytes:
@@ -31,7 +31,9 @@ class Server:
     """Runs one engine in a thread; stop() wakes it with a throwaway connect."""
 
     def __init__(self, response=None, handler=None, sndbuf=None, kind="uring",
-                 max_batch=0, gil_timing=False, gil_batch=False):
+                 max_batch=0, gil_timing=False, gil_batch=False, batch_max=0,
+                 expect_error=False):
+        self.expect_error = expect_error
         if kind == "epoll":
             self.engine = EpollEngine()
         else:
@@ -41,10 +43,10 @@ class Server:
                 pytest.skip(f"io_uring unavailable: {e}")
             if max_batch:
                 self.engine.set_max_batch(max_batch)
-            if gil_timing:
-                self.engine.set_gil_timing(True)
-            if gil_batch:
-                self.engine.set_gil_batching(True)
+        if gil_timing:
+            self.engine.set_gil_timing(True)
+        if gil_batch:
+            self.engine.set_gil_batching(True, batch_max)
         self.listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         if sndbuf:  # inherited by accepted sockets
@@ -82,7 +84,8 @@ class Server:
         self.thread.join(timeout=5)
         assert not self.thread.is_alive(), "reactor did not stop"
         self.listener.close()
-        assert self.error is None, self.error
+        if not self.expect_error:
+            assert self.error is None, self.error
 
     def __enter__(self):
         return self
@@ -485,3 +488,169 @@ def test_gil_batching_timing_and_guards():
     assert st["handler_calls"] == 5
     assert 5 * 2_000_000 <= st["gil_hold_ns"] < 5 * 200_000_000
     assert st["gil_wait_ns"] < st["gil_hold_ns"]
+
+
+# --- handler mode on both interfaces, GIL per request and per batch -----------
+
+KINDS = [("uring", False), ("uring", True), ("epoll", False), ("epoll", True)]
+
+
+@pytest.mark.parametrize("variant", KINDS)
+def test_handler_variants_give_the_same_responses(variant):
+    kind, gil_batch = variant
+
+    def handler(data):
+        path = data.split(b" ")[1]
+        if path.startswith(b"/c0-"):
+            time.sleep(0.03)  # stalls the reactor so the other requests pile up
+        return _response(b"path=" + path)
+
+    with Server(handler=handler, kind=kind, gil_batch=gil_batch) as srv:
+        conns = [srv.connect() for _ in range(24)]
+        for rnd in range(3):
+            for i, c in enumerate(conns):
+                c.sendall(b"GET /c%d-r%d HTTP/1.1\r\n\r\n" % (i, rnd))
+            for i, c in enumerate(conns):
+                want = _response(b"path=/c%d-r%d" % (i, rnd))
+                assert recv_exact(c, len(want)) == want
+        for c in conns:
+            c.close()
+        st = settled_stats(srv.engine, 72)
+    assert st["handler_calls"] == 72 and st["handler_errors"] == 0
+    assert st["requests"] == 72
+    if gil_batch:
+        assert st["gil_acquires"] <= st["handler_calls"] // 2
+    else:
+        assert st["gil_acquires"] == st["handler_calls"]
+
+
+@pytest.mark.parametrize("variant", KINDS)
+def test_handler_variants_large_and_failing_responses(variant):
+    kind, gil_batch = variant
+
+    def handler(data):
+        if b"/boom" in data:
+            raise RuntimeError("boom")
+        n = int(data.split(b" ")[1][1:])
+        return _response(bytes([65 + n % 26]) * n)
+
+    with Server(handler=handler, kind=kind, gil_batch=gil_batch) as srv:
+        a, b, bad = srv.connect(), srv.connect(), srv.connect()
+        a.sendall(b"GET /300000 HTTP/1.1\r\n\r\n")   # needs several sends
+        b.sendall(b"GET /7 HTTP/1.1\r\n\r\n")
+        bad.sendall(b"GET /boom HTTP/1.1\r\n\r\n")
+        want_a = _response(bytes([65 + 300000 % 26]) * 300000)
+        want_b = _response(bytes([65 + 7]) * 7)
+        assert recv_exact(b, len(want_b)) == want_b
+        assert recv_exact(a, len(want_a)) == want_a
+        assert bad.recv(1) == b""          # only the failing connection is closed
+        a.sendall(b"GET /5 HTTP/1.1\r\n\r\n")          # and the others still work
+        want = _response(bytes([65 + 5]) * 5)
+        assert recv_exact(a, len(want)) == want
+        for c in (a, b, bad):
+            c.close()
+        assert srv.engine.get_stats()["handler_errors"] == 1
+
+
+@pytest.mark.parametrize("variant", KINDS)
+def test_keyboard_interrupt_in_handler_stops_the_reactor_and_propagates(variant):
+    # KeyboardInterrupt and SystemExit are not handler failures. They must not
+    # be swallowed at the C boundary (which would send a stale buffer): the
+    # connection is closed and serve_forever_app() raises the exception.
+    kind, gil_batch = variant
+    seen = []
+
+    def handler(data):
+        seen.append(data)
+        if b"/interrupt" in data:
+            raise KeyboardInterrupt
+        return _response(b"ok")
+
+    want = _response(b"ok")
+    srv = Server(handler=handler, kind=kind, gil_batch=gil_batch, expect_error=True)
+    c = srv.connect()
+    c.sendall(REQUEST)
+    assert recv_exact(c, len(want)) == want
+    c.sendall(b"GET /interrupt HTTP/1.1\r\n\r\n")
+    assert c.recv(1) == b""                # closed, no stale response
+    srv.thread.join(timeout=5)
+    assert not srv.thread.is_alive(), "reactor did not stop"
+    assert isinstance(srv.error, KeyboardInterrupt)
+    c.close()
+    srv.listener.close()
+    assert len(seen) == 2
+
+
+@pytest.mark.parametrize("batch_max", [1, 4])
+def test_gil_batching_request_cap(batch_max):
+    # set_gil_batching(True, n): at most n requests per GIL acquisition.
+    def handler(data):
+        path = data.split(b" ")[1]
+        if path.startswith(b"/c0-"):
+            time.sleep(0.03)
+        return _response(b"path=" + path)
+
+    with Server(handler=handler, gil_batch=True, batch_max=batch_max) as srv:
+        conns = [srv.connect() for _ in range(24)]
+        for rnd in range(3):
+            for i, c in enumerate(conns):
+                c.sendall(b"GET /c%d-r%d HTTP/1.1\r\n\r\n" % (i, rnd))
+            for i, c in enumerate(conns):
+                want = _response(b"path=/c%d-r%d" % (i, rnd))
+                assert recv_exact(c, len(want)) == want
+        for c in conns:
+            c.close()
+        st = settled_stats(srv.engine, 72)
+    assert st["handler_calls"] == 72
+    assert st["gil_acquires"] >= 72 // batch_max          # the cap is respected
+    if batch_max == 1:
+        assert st["gil_acquires"] == 72
+    else:
+        assert st["gil_acquires"] < 72                    # and batching still happens
+
+
+def test_batch_io_serves_queued_sockets_in_one_call():
+    # BatchIO: the helper behind the py-epoll-batch benchmark engine.
+    resp = _response(b"Hello, world!")
+    io = BatchIO()
+    with pytest.raises(RuntimeError):
+        io.run()                                   # no response set yet
+    io.set_response(resp)
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(8)
+    port = listener.getsockname()[1]
+    clients, server_fds = [], []
+    for _ in range(3):
+        c = socket.create_connection(("127.0.0.1", port), timeout=5)
+        c.settimeout(5)
+        conn, _addr = listener.accept()
+        conn.setblocking(False)
+        clients.append(c)
+        server_fds.append(conn.detach())           # BatchIO owns the socket now
+    for c in clients:
+        c.sendall(REQUEST)
+    time.sleep(0.05)
+    for fd in server_fds:
+        io.queue(fd)
+    assert io.run() == 3
+    for c in clients:
+        assert recv_exact(c, len(resp)) == resp
+    # A socket with nothing to read is skipped; one whose peer closed is closed.
+    clients[0].close()
+    time.sleep(0.05)
+    io.queue(server_fds[0])
+    io.queue(server_fds[1])
+    assert io.run() == 0
+    with pytest.raises(OSError):
+        os.fstat(server_fds[0])                    # closed by BatchIO
+    os.fstat(server_fds[1])                        # still open
+    st = io.get_stats()
+    assert st["requests"] == 3 and st["runs"] == 2
+    # 3 recv + 3 send, then recv + close for the closed peer and one recv (EAGAIN)
+    assert st["syscalls"] == 9
+    for c in clients[1:]:
+        c.close()
+    for fd in server_fds[1:]:
+        os.close(fd)
+    listener.close()

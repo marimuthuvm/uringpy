@@ -122,7 +122,8 @@ class Cell:
 
 def load(results_dir):
     """Return ({key: Cell}, [folder info]). key = (experiment, gil, engine, mode,
-    workers, resp_size, max_batch, handler_work)."""
+    workers, resp_size, max_batch, handler_work, conns). Runs written before the
+    conns column existed used the default of 400 connections."""
     cells, folders = {}, []
     for name in sorted(os.listdir(results_dir)):
         d = os.path.join(results_dir, name)
@@ -139,7 +140,8 @@ def load(results_dir):
         for r in rows:
             gil = r.get("srv_gil") or folder_gil
             key = (r["experiment"], gil, r["engine"], r["mode"], int(r["workers"]),
-                   int(r["resp_size"]), int(r["max_batch"]), int(r.get("handler_work") or 0))
+                   int(r["resp_size"]), int(r["max_batch"]), int(r.get("handler_work") or 0),
+                   int(r.get("conns") or 400))
             cell = cells.setdefault(key, Cell())
             cell.cores = cores
             if r.get("status") == "ok":
@@ -153,14 +155,15 @@ def load(results_dir):
 
 
 class Data:
-    def __init__(self, cells, folders):
-        self.cells, self.folders = cells, folders
+    def __init__(self, cells, folders, results_dir=None):
+        self.cells, self.folders, self.results_dir = cells, folders, results_dir
 
-    def get(self, exp, gil, engine, mode, workers, size=13, batch=0, work=0):
-        return self.cells.get((exp, gil, engine, mode, workers, size, batch, work))
+    def get(self, exp, gil, engine, mode, workers, size=13, batch=0, work=0, conns=400):
+        return self.cells.get((exp, gil, engine, mode, workers, size, batch, work, conns))
 
     def values(self, exp, gil, field):
-        idx = {"engine": 2, "mode": 3, "workers": 4, "size": 5, "batch": 6, "work": 7}[field]
+        idx = {"engine": 2, "mode": 3, "workers": 4, "size": 5, "batch": 6, "work": 7,
+               "conns": 8}[field]
         out = []
         for k in self.cells:
             if k[0] == exp and k[1] == gil and k[idx] not in out:
@@ -485,19 +488,26 @@ def tab_size(d):
         ["Body & \\code{uringpy} & " + code(base) + " & Gbit/s & $C$ & sys/req \\\\"], body)
 
 
+def _flagged(*cells):
+    """Dagger for a ratio whose cells include one with CV above 5%."""
+    return "$^\\dagger$" if any(c is not None and c.n and c.cv > 5 for c in cells) else ""
+
+
 def tab_handler(d):
     """Cost model against measurement: handler work swept, GIL time measured.
 
     For each engine and amount of handler work: one-worker throughput x_1, the
     measured GIL hold time per request t_p at one worker, the GIL-held fraction
     f = t_p * x_1 (x_1 = 1/(t_c + t_p) for a saturated worker), the bound
-    min(N, 1/f) at N = 4, the measured scaling of threads and of processes, and
-    at four worker threads the measured wait for the GIL per request and the
-    GIL acquisitions per request.
+    min(N, 1/f) at N = 4, the measured scaling of threads and of processes,
+    and at four worker threads: GIL hold time and wait time per request, GIL
+    acquisitions per request, and the GIL utilisation U_4 = x_4 * t_p,4 (the
+    share of each second the GIL is held running handlers).
     """
     body, used = [], []
     engines = [e for e in ("uringpy-app", "uringpy-app-batch")
                if e in d.values("handler", "on", "engine")]
+    dagger = False
     for n_engine, engine in enumerate(engines):
         works = sorted(k[7] for k in d.cells
                        if k[0] == "handler" and k[1] == "on" and k[2] == engine
@@ -514,31 +524,131 @@ def tab_handler(d):
             tp = t1.gil_hold_us if t1 else float("nan")
             f = tp * 1e-6 * t1.mean if t1 and not nan(tp) else float("nan")
             bound = min(4.0, 1.0 / f) if f and not nan(f) else float("nan")
+            tp4 = t4.gil_hold_us if t4 else float("nan")
+            util = tp4 * 1e-6 * t4.mean if t4 and not nan(tp4) else float("nan")
+            acq = t4.acquires_per_request if t4 else float("nan")
+            if nan(acq) and engine == "uringpy-app" and t4 and not nan(tp4):
+                acq = 1.0  # one acquisition per call by construction (older runs lack the counter)
+            flags = [_flagged(t2, t1), _flagged(t4, t1), _flagged(p4, p1), _flagged(f4, f1)]
+            dagger = dagger or any(flags)
             body.append(" & ".join([
-                code(engine), str(work), k_pm(t1), fnum(tp, 2), fnum(f, 2), fnum(bound, 2),
-                ratio_pm(t2, t1), ratio_pm(t4, t1), ratio_pm(p4, p1), ratio_pm(f4, f1),
-                fnum(t4.gil_hold_us if t4 else None, 2),
-                fnum(t4.gil_wait_us if t4 else None, 2),
-                fnum(t4.acquires_per_request if t4 else None, 3)]) + " \\\\")
+                "request" if engine == "uringpy-app" else "batch",
+                str(work), k_pm(t1), fnum(tp, 2), fnum(f, 2), fnum(bound, 2),
+                ratio_pm(t2, t1) + flags[0], ratio_pm(t4, t1) + flags[1],
+                ratio_pm(p4, p1) + flags[2], ratio_pm(f4, f1) + flags[3],
+                fnum(tp4, 2), fnum(t4.gil_wait_us if t4 else None, 2),
+                fnum(acq, 3), "n/a" if util > 1.02 else fnum(util, 2)]) + " \\\\")
     if not body:
         return None
     return table(
         "table*",
         "Handler work swept (iterations of an interpreted loop added to every request), GIL "
-        "build unless stated. One-worker throughput $\\bar{x}_1$ in thousands of requests per "
+        "build unless stated, with the GIL taken once per request (\\code{uringpy-app}) or "
+        "once per batch of requests (\\code{uringpy-app-batch}). One-worker throughput $\\bar{x}_1$ in thousands of requests per "
         f"second (mean $\\pm$ 95\\% half-width, {run_count(used)}); GIL hold time per request "
         "$t_p$ at one worker; $f = t_p\\,\\bar{x}_1$; the bound $\\min(4, 1/f)$ "
         "of~\\eqref{eq:bound}; measured scaling of worker threads ($S_2$, $S_4$), of worker "
         "processes ($S_4^{\\mathrm{proc}}$) and of threads on the free-threaded build "
-        "($S_4^{\\mathrm{ft}}$); and, at four worker threads, GIL hold time $t_p$, wait time "
-        "$w$ and GIL acquisitions per request.",
-        "tab:handler", "@{}lrrrrrrrrrrrr@{}",
-        ["Engine & Work & $\\bar{x}_1$ & $t_p$ ($\\mu$s) & $f$ & bound & $S_2$ & $S_4$ "
-         "& $S_4^{\\mathrm{proc}}$ & $S_4^{\\mathrm{ft}}$ & $t_{p,4}$ ($\\mu$s) & $w_4$ ($\\mu$s) "
-         "& acq./req \\\\"], body, colsep="3pt")
+        "($S_4^{\\mathrm{ft}}$); and, at four worker threads, GIL hold time $t_{p,4}$ and wait "
+        "time $w_4$ per request, GIL acquisitions per request, and GIL utilisation "
+        "$U_4 = \\bar{x}_4\\,t_{p,4}$.",
+        "tab:handler", "@{}lrrrrrrrrrrrrr@{}",
+        ["GIL per & Work & $\\bar{x}_1$ & $t_p$ ($\\mu$s) & $f$ & bound & $S_2$ & $S_4$ "
+         "& $S_4^{\\mathrm{proc}}$ & $S_4^{\\mathrm{ft}}$ & $t_{p,4}$ & $w_4$ "
+         "& acq. & $U_4$ \\\\"], body, colsep="2.5pt",
+        note=("$t_{p,4}$ and $w_4$ in $\\mu$s. The per-request and per-batch rows come "
+              "from separate experiments. n/a: with "
+              "batching and long handlers the interpreter's switch interval interrupts a "
+              "batch, so the recorded hold includes time waiting to resume."
+              + (" $^\\dagger$ A configuration in this ratio had a coefficient of variation "
+                 "above 5\\%." if dagger else "")))
 
 
-TABLES = {"handler": tab_handler, "scaling": tab_scaling, "factorial": tab_factorial, "effects": tab_effects,
+def tab_ladder(d):
+    """Thread scaling against how often the GIL changes hands per request.
+
+    GIL build, worker threads. The hand-off count is measured, not assumed:
+    for the Python loops it is the number of GIL releases per request (every
+    system call they make releases the GIL, and system calls are counted); for
+    the C reactor with a handler it is the counted GIL acquisitions per handler
+    call; the C reactors without a handler never take the GIL.
+    """
+    def releases(c):          # Python loops: counted system calls per request
+        return c.syscalls_per_request if c else float("nan")
+
+    def waits(c):             # py-uring-held releases the GIL only while waiting
+        req, w = (c.total("srv_requests"), c.total("srv_waits")) if c else (0, 0)
+        return w / req if req and w else float("nan")
+
+    rows = [
+        ("C loop, \\code{io\\_uring}; no Python", "factorial", "uringpy", lambda c: 0.0),
+        ("C loop, \\code{epoll}; no Python", "factorial", "c-epoll", lambda c: 0.0),
+        ("C loop, handler, GIL per batch", "app", "uringpy-app-batch",
+         lambda c: c.acquires_per_request),
+        ("Python loop, \\code{io\\_uring}", "factorial", "py-uring", releases),
+        ("C loop, handler, GIL per request", "app", "uringpy-app",
+         lambda c: c.acquires_per_request),
+        ("Python loop, \\code{epoll}", "factorial", "py-epoll", releases),
+        ("Python loop, \\code{io\\_uring}, GIL held in submit$^\\ddagger$", "factorial",
+         "py-uring-held", waits),
+    ]
+    body, used = [], []
+    for label, exp, engine, handoffs in rows:
+        c1, c4 = d.get(exp, "on", engine, "thread", 1), d.get(exp, "on", engine, "thread", 4)
+        if not c1 or not c4:
+            continue
+        if engine == "py-uring-held":
+            body.append("\\midrule")
+        used += [c1, c4]
+        h = handoffs(c4)
+        body.append(" & ".join([
+            label, code(engine), "0" if h == 0 else fnum(h, 3), k_pm(c1), k_pm(c4),
+            ratio_pm(c4, c1), fnum(c4.busy_cores, 2)]) + " \\\\")
+    if len(body) < 3:
+        return None
+    return table(
+        "table*",
+        "Thread scaling against GIL hand-offs per request (four worker threads, GIL build, "
+        "13-byte body). Hand-offs are measured at four workers: GIL releases per request for "
+        "the Python loops, GIL acquisitions per request for the C loop with a handler. "
+        f"Throughput in thousands of requests per second (mean $\\pm$ 95\\% half-width, "
+        f"{run_count(used)}).",
+        "tab:ladder", "@{}llrrrrr@{}",
+        ["Configuration & Engine & Hand-offs/req. & $\\bar{x}_1$ & $\\bar{x}_4$ & $S_4$ & $C_4$ \\\\"],
+        body,
+        note="$^\\ddagger$ Releases the GIL as rarely as \\code{py-uring}, but the kernel "
+             "performs the queued sends while the GIL is held, so nearly all of a request's "
+             "processor time is spent under it.")
+
+
+def tab_probe(d):
+    """Contention probe (gil_experiment.py): read from the newest probe-*.txt."""
+    import glob
+    import re
+    files = sorted(glob.glob(os.path.join(d.results_dir or "", "probe-*.txt")))
+    if not files:
+        return None
+    text = open(files[-1]).read()
+    rows = re.findall(r"^\|\s*(\d+)\s*\|\s*([\d.]+) \(([\d.]+)\)\s*\|\s*([\d.]+)x\s*\|\s*([\d.]+)x"
+                      r"\s*\|\s*([\d.]+) \(([\d.]+)\)\s*\|\s*([\d.]+)x\s*\|\s*([\d.]+)x\s*\|",
+                      text, re.M)
+    reps = re.search(r"reps=(\d+)", text)
+    if not rows:
+        return None
+    body = [f"{k} & {pm} ({psd}) & {px} & {pmin} & {float(cm):.3f} ({float(csd):.3f}) & {cx} & {cmin} \\\\"
+            for k, pm, psd, px, pmin, cm, csd, cx, cmin in rows]
+    return table(
+        "table",
+        "Contention probe: time in seconds to process a fixed number of events while $K$ "
+        "threads compete for the GIL, as mean (standard deviation) over "
+        f"{reps.group(1) if reps else '?'} repetitions, with the slowdown relative to $K=0$ "
+        "computed from the means and from the fastest repetition (min).",
+        "tab:probe", "@{}rrrrrrr@{}",
+        ["& \\multicolumn{3}{c}{Python loop} & \\multicolumn{3}{c}{C \\code{nogil} loop} \\\\",
+         "$K$ & time (sd) & mean & min & time (sd) & mean & min \\\\"], body, colsep="3pt")
+
+
+TABLES = {"probe": tab_probe, "ladder": tab_ladder, "handler": tab_handler, "scaling": tab_scaling, "factorial": tab_factorial, "effects": tab_effects,
           "batch": tab_batch, "app": tab_app, "size": tab_size}
 
 
@@ -559,7 +669,7 @@ def main(argv=None):
     ap.add_argument("--dump", action="store_true", help="print every cell as text and exit")
     args = ap.parse_args(argv)
 
-    data = Data(*load(args.results))
+    data = Data(*load(args.results), results_dir=args.results)
     if not data.cells:
         sys.exit(f"no results found under {args.results}")
     if args.dump:

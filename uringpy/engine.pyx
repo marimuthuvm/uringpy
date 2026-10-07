@@ -245,6 +245,7 @@ cdef class URingEngine:
     cdef int *_pend_slot
     cdef int *_pend_res
     cdef int _pend_n
+    cdef int _pend_cap
     cdef unsigned long long stat_gil_acquires
     def __cinit__(self, unsigned int entries=1024, size_t slot_size=4096, size_t total_slots=1024):
         cdef int ret = io_uring_queue_init(entries, &self.ring, 0)
@@ -285,6 +286,7 @@ cdef class URingEngine:
         self._pend_slot = NULL
         self._pend_res = NULL
         self._pend_n = 0
+        self._pend_cap = PEND_CAP
         self.stat_gil_acquires = 0
         self.initialized = True
 
@@ -579,7 +581,7 @@ cdef class URingEngine:
             raise RuntimeError("set_gil_timing() cannot be called while serving")
         self._gil_timing = enabled
 
-    def set_gil_batching(self, bint enabled):
+    def set_gil_batching(self, bint enabled, unsigned int max_requests=0):
         # serve_forever_app only. Off (the default): the GIL is taken once per
         # request, around that request's handler call. On: the requests found
         # in one pass over the completion queue are collected, and the GIL is
@@ -587,6 +589,12 @@ cdef class URingEngine:
         # same order; what changes is how often the lock changes hands, which
         # is what limits worker threads when handlers are short. The price is
         # that a response is not queued until the whole batch has been handled.
+        #
+        # max_requests caps how many requests one acquisition may serve (0 = as
+        # many as the pass found, up to 1024). It exists to measure how thread
+        # scaling depends on the number of requests per GIL acquisition;
+        # max_requests=1 is one acquisition per request through the batching
+        # code path.
         if self._serving:
             raise RuntimeError("set_gil_batching() cannot be called while serving")
         if enabled and self._pend_fd == NULL:
@@ -595,6 +603,7 @@ cdef class URingEngine:
             self._pend_res = <int*>malloc(PEND_CAP * sizeof(int))
             if self._pend_fd == NULL or self._pend_slot == NULL or self._pend_res == NULL:
                 raise MemoryError("Failed to allocate the request batch")
+        self._pend_cap = PEND_CAP if max_requests == 0 or max_requests > PEND_CAP else <int>max_requests
         self._gil_batch = enabled
 
     def set_max_batch(self, unsigned int n):
@@ -717,6 +726,11 @@ cdef class URingEngine:
             t_in = _now_ns()
             self.stat_gil_wait_ns += t_in - t_req
         for i in range(count):
+            if self._stop:
+                # A handler raised KeyboardInterrupt or SystemExit: do not call
+                # the rest; their connections are closed as the reactor stops.
+                self._pend_res[i] = -1
+                continue
             self._pend_res[i] = self._handle_locked(
                 handler, self._pend_fd[i],
                 mem + <size_t>self._pend_slot[i] * slot_size, self._pend_res[i])
@@ -784,6 +798,16 @@ cdef class URingEngine:
             if self.stat_handler_errors == 1:
                 traceback.print_exc(file=sys.stderr)
             return -1
+        except BaseException as exc:
+            # KeyboardInterrupt, SystemExit and the like are not handler
+            # failures: close this connection, stop the reactor, and let
+            # serve_forever_app() re-raise the exception to its caller. Without
+            # this branch the exception would be lost at the C boundary and the
+            # call would count as a success with no response prepared.
+            if self._pending_exc is None:
+                self._pending_exc = exc
+            self._stop = 1
+            return -1
 
     cdef int _check_signals(self) noexcept with gil:
         # The wait was interrupted by a signal. Python-level signal handlers
@@ -832,6 +856,8 @@ cdef class URingEngine:
             self.stat_waits += 1
             batch = 0
             while True:
+                if self._stop != 0:
+                    break  # stop() was called, or a handler raised BaseException
                 if max_batch != 0 and batch >= max_batch:
                     break  # batch cap reached: go back through io_uring_enter
                 ret = io_uring_peek_cqe(&self.ring, &cqe)
@@ -861,7 +887,7 @@ cdef class URingEngine:
                         self._pend_slot[self._pend_n] = <int>low
                         self._pend_res[self._pend_n] = res
                         self._pend_n += 1
-                        if self._pend_n == PEND_CAP:
+                        if self._pend_n >= self._pend_cap:
                             self._flush_pending(handler, timing, enters)
                     elif app:
                         t_req = 0

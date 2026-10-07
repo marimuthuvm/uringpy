@@ -10,8 +10,8 @@ Engines (--engine):
 
   The 2x2 ablation: kernel interface x where the per-event loop runs.
 
-                    | loop in C, GIL released | loop in Python (GIL held)
-    ----------------+-------------------------+--------------------------
+                    | loop in C, GIL released | loop in Python
+    ----------------+-------------------------+----------------
     io_uring        | uringpy                 | py-uring
     epoll           | c-epoll                 | py-epoll
 
@@ -19,16 +19,27 @@ Engines (--engine):
               C region.
     c-epoll   EpollEngine.serve_forever_echo(): the same C loop on epoll, one
               recv() and one send() system call per request.
-    py-uring  URingEngine.get_events(): io_uring batching, but every
-              completion is dispatched by Python bytecode. The GIL is released
-              while waiting and while submitting.
-    py-uring-held  the same loop holding the GIL while it submits (the kernel
-              does the queued sends inside that call). Not a fifth cell of the
-              design: it shows how much of py-uring's behaviour depends on
-              where the GIL is held, as opposed to what is interpreted.
-    py-epoll  select.epoll with a minimal Python loop.
-    (py-uring and py-epoll send each response with a single send, so they are
-    for small responses only.)
+    py-uring  URingEngine.get_events(): io_uring batching, every completion
+              dispatched by Python bytecode. The GIL is released while waiting
+              and while submitting, i.e. twice per batch.
+    py-epoll  select.epoll with a minimal Python loop. CPython releases the
+              GIL around each of its system calls, i.e. about twice per
+              request.
+
+  Two more Python loops, each differing from a cell above in one thing only.
+  They are not cells of the design; they separate "how often the GIL is given
+  up" and "what runs while it is held" from the interface and the language:
+
+    py-epoll-batch  py-epoll with the recv() and send() of every ready socket
+              done by one C call that releases the GIL once (BatchIO): the
+              same interface and the same two system calls per request as
+              py-epoll, but the GIL is given up twice per pass, like py-uring.
+    py-uring-held   py-uring holding the GIL while it submits (the kernel does
+              the queued sends inside that call): as few GIL releases as
+              py-uring, but most of a request's processor time under the GIL.
+
+    (The Python loops send each response with a single send, so they are for
+    small responses only.)
 
   Existing event loops (asyncio streams server, loop implementation swapped):
     asyncio   stdlib loop          uvloop     libuv-based loop
@@ -43,9 +54,14 @@ Engines (--engine):
   Application workload: every request goes through the same Python handler
   (app_workload.handle_request).
     uringpy-app  URingEngine.serve_forever_app(): transport in C, GIL taken
-                 only for the handler call.
+                 only for the handler call, once per request.
     uringpy-app-batch  the same, with the GIL taken once for all requests
                  found in one pass over the completion queue.
+    uringpy-app-batch<N>  (N = 1, 2, 4, 8, 16, 64) the same, with at most N
+                 requests served per GIL acquisition.
+    c-epoll-app, c-epoll-app-batch  EpollEngine.serve_forever_app(): the same
+                 two variants on epoll, to see whether GIL batching depends on
+                 the interface.
     asyncio-app  handler called inside the asyncio stream handler.
     asyncio-proto-app, uvloop-proto-app  handler called from data_received of
                  the Protocol API, the faster way to use either loop.
@@ -77,6 +93,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import resource
 import signal
 import socket
 import sys
@@ -116,8 +133,12 @@ def _fmt(value):
 
 
 def _print_stats():
-    # CPU time (user + system) this process has used, for cost-per-request.
-    print(f"[proc] cpu_ns={time.process_time_ns()}", flush=True)
+    # CPU time (user + system) this process has used, for cost-per-request,
+    # and its context switches: a thread that has to wait for the GIL sleeps,
+    # which the kernel counts as a voluntary context switch.
+    ru = resource.getrusage(resource.RUSAGE_SELF)
+    print(f"[proc] cpu_ns={time.process_time_ns()} nvcsw={ru.ru_nvcsw} "
+          f"nivcsw={ru.ru_nivcsw}", flush=True)
     for wid, get_stats in _STAT_SOURCES:
         stats = get_stats()
         print(f"[worker {wid}] " + " ".join(f"{k}={_fmt(v)}" for k, v in stats.items()),
@@ -144,6 +165,10 @@ def make_reuseport_listener(host, port, backlog=1024):
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+    # Accepted sockets inherit TCP_NODELAY from the listener on Linux. asyncio
+    # and uvloop set it on every connection; setting it here gives every engine
+    # the same socket options.
+    sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
     sock.bind((host, port))
     sock.listen(backlog)
     return sock
@@ -151,16 +176,39 @@ def make_reuseport_listener(host, port, backlog=1024):
 
 # --- C reactors ---------------------------------------------------------------
 
-def uringpy_worker(host, port, wid, app=False, gil_batch=False):
+def uringpy_worker(host, port, wid, app=False, gil_batch=False, batch_max=0):
     """io_uring, loop in C. app=True calls the shared Python handler per request;
     gil_batch=True takes the GIL once per batch of requests instead of once per
-    request."""
+    request, serving at most batch_max requests per acquisition (0 = no cap)."""
     from uringpy import URingEngine
 
     listener = make_reuseport_listener(host, port)
     engine = URingEngine(entries=8192, slot_size=4096, total_slots=32768)
     if MAX_BATCH:
         engine.set_max_batch(MAX_BATCH)
+    if app:
+        from app_workload import handle_request
+        if GIL_TIMING:
+            engine.set_gil_timing(True)
+        if gil_batch:
+            engine.set_gil_batching(True, batch_max)
+    else:
+        engine.set_response(HTTP_RESPONSE)
+    _STAT_SOURCES.append((wid, engine.get_stats))
+    _install_term_handler()
+    if app:
+        engine.serve_forever_app(listener.fileno(), handle_request)
+    else:
+        engine.serve_forever_echo(listener.fileno())
+
+
+def c_epoll_worker(host, port, wid, app=False, gil_batch=False):
+    """epoll, loop in C: the same reactor as uringpy on the readiness interface,
+    with the same two handler variants."""
+    from uringpy import EpollEngine
+
+    listener = make_reuseport_listener(host, port)
+    engine = EpollEngine()
     if app:
         from app_workload import handle_request
         if GIL_TIMING:
@@ -175,18 +223,6 @@ def uringpy_worker(host, port, wid, app=False, gil_batch=False):
         engine.serve_forever_app(listener.fileno(), handle_request)
     else:
         engine.serve_forever_echo(listener.fileno())
-
-
-def c_epoll_worker(host, port, wid):
-    """epoll, loop in C: the same reactor as uringpy on the readiness interface."""
-    from uringpy import EpollEngine
-
-    listener = make_reuseport_listener(host, port)
-    engine = EpollEngine()
-    engine.set_response(HTTP_RESPONSE)
-    _STAT_SOURCES.append((wid, engine.get_stats))
-    _install_term_handler()
-    engine.serve_forever_echo(listener.fileno())
 
 
 # --- Python-dispatch loops ----------------------------------------------------
@@ -211,9 +247,12 @@ def py_uring_worker(host, port, wid, release_gil=True):
         # exactly one, so waits + submits is an upper bound on system calls.
         syscalls = st["waits"] + st["submits"]
         req = counters["requests"]
+        # GIL releases: one per get_events(wait=True), and one per flush()
+        # unless this is the variant that holds the GIL while submitting.
+        releases = st["waits"] + (st["submits"] if release_gil else 0)
         return {"completions_per_wait": st["completions_per_wait"],
                 "waits": st["waits"], "completions": st["completions"],
-                "requests": req, "syscalls": syscalls,
+                "requests": req, "syscalls": syscalls, "gil_releases": releases,
                 "syscalls_per_request": (syscalls / req) if req else 0.0}
 
     _STAT_SOURCES.append((wid, get_stats))
@@ -262,6 +301,9 @@ def py_epoll_worker(host, port, wid):
     def get_stats():
         req = counters["requests"]
         out = dict(counters)
+        # Every system call this loop makes goes through CPython, which
+        # releases the GIL around it.
+        out["gil_releases"] = counters["syscalls"]
         out["events_per_wait"] = (counters["events"] / counters["waits"]
                                   if counters["waits"] else 0.0)
         out["syscalls_per_request"] = (counters["syscalls"] / req) if req else 0.0
@@ -310,6 +352,65 @@ def py_epoll_worker(host, port, wid):
             counters["syscalls"] += 1
 
 
+def py_epoll_batch_worker(host, port, wid):
+    """epoll, loop in Python, I/O batched in C: the loop of py_epoll_worker,
+    except that the recv() and send() of all ready sockets are done by one
+    BatchIO.run() call, which releases the GIL once. Same interface and same
+    two system calls per request as py-epoll; the GIL is given up twice per
+    pass over the ready list (epoll.poll and run) instead of twice per request.
+    Each ready socket is still dispatched by interpreted code (one queue()
+    call), as each completion is in py-uring."""
+    import select
+    from uringpy import BatchIO
+
+    listener = make_reuseport_listener(host, port)
+    listener.setblocking(False)
+    lfd = listener.fileno()
+    ep = select.epoll()
+    ep.register(lfd, select.EPOLLIN)
+    io = BatchIO()
+    io.set_response(HTTP_RESPONSE)
+    # Counted here: the system calls made from Python (each releases the GIL).
+    counters = {"syscalls": 1, "waits": 0, "events": 0}
+
+    def get_stats():
+        st = io.get_stats()
+        req = st["requests"]
+        syscalls = counters["syscalls"] + st["syscalls"]
+        return {"requests": req, "syscalls": syscalls, "waits": counters["waits"],
+                "events": counters["events"],
+                "gil_releases": counters["syscalls"] + st["runs"],
+                "events_per_wait": (counters["events"] / counters["waits"]
+                                    if counters["waits"] else 0.0),
+                "syscalls_per_request": (syscalls / req) if req else 0.0}
+
+    _STAT_SOURCES.append((wid, get_stats))
+    _install_term_handler()
+
+    queue, run = io.queue, io.run
+    while True:
+        events = ep.poll()
+        counters["syscalls"] += 1
+        counters["waits"] += 1
+        counters["events"] += len(events)
+        for fd, _what in events:
+            if fd == lfd:
+                while True:
+                    try:
+                        conn, _addr = listener.accept()
+                        counters["syscalls"] += 1
+                    except BlockingIOError:
+                        counters["syscalls"] += 1
+                        break
+                    conn.setblocking(False)
+                    cfd = conn.detach()  # BatchIO owns and closes the socket
+                    ep.register(cfd, select.EPOLLIN)
+                    counters["syscalls"] += 1
+                continue
+            queue(fd)
+        run()
+
+
 # --- asyncio-family event loops -----------------------------------------------
 
 def _new_loop(name):
@@ -354,7 +455,9 @@ def asyncio_worker(host, port, wid, app=False, loop_name="asyncio"):
     listener = make_reuseport_listener(host, port)
     loop = _new_loop(loop_name)
     asyncio.set_event_loop(loop)
-    server = loop.run_until_complete(asyncio.start_server(handle, sock=listener))
+    # backlog: asyncio calls listen() again with its own default of 100.
+    server = loop.run_until_complete(
+        asyncio.start_server(handle, sock=listener, backlog=1024))
     _run_loop(loop, server)
 
 
@@ -405,7 +508,8 @@ def asyncio_proto_worker(host, port, wid, loop_name="asyncio", app=False):
     listener = make_reuseport_listener(host, port)
     loop = _new_loop(loop_name)
     asyncio.set_event_loop(loop)
-    server = loop.run_until_complete(loop.create_server(Echo, sock=listener))
+    server = loop.run_until_complete(
+        loop.create_server(Echo, sock=listener, backlog=1024))
     _run_loop(loop, server)
 
 
@@ -424,6 +528,7 @@ WORKERS = {
     "py-uring": py_uring_worker,
     "py-uring-held": lambda host, port, wid: py_uring_worker(host, port, wid, release_gil=False),
     "py-epoll": py_epoll_worker,
+    "py-epoll-batch": py_epoll_batch_worker,
     "asyncio": asyncio_worker,
     "asyncio-proto": _loop_worker("asyncio", proto=True),
     "uvloop": _loop_worker("uvloop"),
@@ -433,10 +538,24 @@ WORKERS = {
     "uringpy-app": lambda host, port, wid: uringpy_worker(host, port, wid, app=True),
     "uringpy-app-batch": lambda host, port, wid: uringpy_worker(host, port, wid, app=True,
                                                                 gil_batch=True),
+    "c-epoll-app": lambda host, port, wid: c_epoll_worker(host, port, wid, app=True),
+    "c-epoll-app-batch": lambda host, port, wid: c_epoll_worker(host, port, wid, app=True,
+                                                                gil_batch=True),
     "asyncio-app": _loop_worker("asyncio", app=True),
     "asyncio-proto-app": _loop_worker("asyncio", proto=True, app=True),
     "uvloop-proto-app": _loop_worker("uvloop", proto=True, app=True),
 }
+
+
+def _capped_batch_worker(batch_max):
+    def worker(host, port, wid):
+        uringpy_worker(host, port, wid, app=True, gil_batch=True, batch_max=batch_max)
+    return worker
+
+
+# uringpy-app-batch<N>: at most N requests per GIL acquisition.
+for _n in (1, 2, 4, 8, 16, 64):
+    WORKERS[f"uringpy-app-batch{_n}"] = _capped_batch_worker(_n)
 
 
 def run(worker_fn, workers, mode, host, port):
@@ -500,10 +619,9 @@ def main(argv=None):
     try:
         if args.engine.split("-")[0] in ("uvloop", "uringcore", "uringloop"):
             _new_loop(args.engine.split("-")[0]).close()
-        elif args.engine == "c-epoll":
-            from uringpy import EpollEngine  # noqa: F401
-        elif args.engine in ("uringpy", "uringpy-app", "uringpy-app-batch", "py-uring",
-                             "py-uring-held"):
+        elif args.engine.startswith(("c-epoll", "py-epoll-batch")):
+            from uringpy import BatchIO, EpollEngine  # noqa: F401
+        elif args.engine.startswith(("uringpy", "py-uring")):
             from uringpy import URingEngine  # noqa: F401
     except Exception as exc:
         sys.exit(f"[{args.engine}] engine unavailable in this environment: {exc!r}")

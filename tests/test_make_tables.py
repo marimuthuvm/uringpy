@@ -103,7 +103,9 @@ def test_handler_table_derives_f_and_bound(tmp_path):
     assert t4.gil_wait_us == 30.0 and t4.acquires_per_request == 0.25
     tex = mt.tab_handler(d)
     # t_p = 10 us at 50k req/s -> f = 0.50 -> bound 2.00; S_2 = 1.50, S_4 = 1.60, processes 3.00
-    row = next(line for line in tex.splitlines() if line.startswith("\\code{uringpy-app} & 300"))
+    row = next(line for line in tex.splitlines() if line.startswith("request & 300"))
     assert "& 10.00 & 0.50 & 2.00 &" in row
     assert "1.50 $\\pm$" in row and "1.60 $\\pm$" in row and "3.00 $\\pm$" in row
-    assert row.rstrip(" \\").endswith("& 12.00 & 30.00 & 0.250")
+    # at four threads: hold 12 us, wait 30 us, 0.25 acquisitions per call,
+    # GIL utilisation 12 us * 80k req/s = 0.96
+    assert row.rstrip(" \\").endswith("& 12.00 & 30.00 & 0.250 & 0.96")

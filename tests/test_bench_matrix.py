@@ -120,26 +120,58 @@ def test_summarize_scaling_and_flags():
     assert "no successful run: engine unavailable" in missing
 
 
+def _args(**kw):
+    base = dict(engines=None, modes=None, workers=None, resp_sizes=None, max_batch=None,
+                handler_work=None, gil_timing=False, conns=400, conns_list=None, exclude=None)
+    base.update(kw)
+    return bm.argparse.Namespace(**base)
+
+
 def test_build_cells_presets_and_overrides():
-    args = bm.argparse.Namespace(experiment="batch", engines=None, modes=None,
-                                 workers=None, resp_sizes=None, max_batch=None)
-    args.handler_work = None
-    args.gil_timing = False
+    args = _args(experiment="batch")
     cells = bm.build_cells(args)
-    assert len(cells) == 6 and ("uringpy", "thread", 1, 13, 0, 0) in cells
+    assert len(cells) == 6 and ("uringpy", "thread", 1, 13, 0, 0, 400) in cells
     assert args.gil_timing is False
-    args = bm.argparse.Namespace(experiment="scaling", engines="uringpy", modes="thread",
-                                 workers="1,8", resp_sizes=None, max_batch=None,
-                                 handler_work=None, gil_timing=False)
-    assert bm.build_cells(args) == [("uringpy", "thread", 1, 13, 0, 0),
-                                    ("uringpy", "thread", 8, 13, 0, 0)]
-    args = bm.argparse.Namespace(experiment="handler", engines=None, modes="thread",
-                                 workers="1", resp_sizes=None, max_batch=None,
-                                 handler_work=None, gil_timing=False)
+    args = _args(experiment="scaling", engines="uringpy", modes="thread", workers="1,8")
+    assert bm.build_cells(args) == [("uringpy", "thread", 1, 13, 0, 0, 400),
+                                    ("uringpy", "thread", 8, 13, 0, 0, 400)]
+    args = _args(experiment="handler", engines="uringpy-app", modes="thread", workers="1")
     cells = bm.build_cells(args)
-    assert {c[0] for c in cells} == {"uringpy-app", "uringpy-app-batch"}
-    assert [c[5] for c in cells if c[0] == "uringpy-app"] == [0, 30, 100, 300, 1000, 3000]
+    assert [c[5] for c in cells] == [0, 30, 100, 300, 1000, 3000]
     assert args.gil_timing is True      # the preset switches GIL timing on
+
+
+def test_build_cells_exclusions_and_connection_sweep():
+    # The handler preset measures the two baselines in process mode at one and
+    # four workers only; uringpy is measured everywhere.
+    cells = bm.build_cells(_args(experiment="handler"))
+    by_engine = {}
+    for c in cells:
+        by_engine.setdefault(c[0], set()).add((c[1], c[2]))
+    assert by_engine["uringpy-app"] == {(m, w) for m in ("thread", "process") for w in (1, 2, 4)}
+    assert by_engine["uringpy-app-batch"] == by_engine["uringpy-app"]
+    assert by_engine["uvloop-proto-app"] == {("process", 1), ("process", 4)}
+    assert by_engine["asyncio-proto-app"] == {("process", 1), ("process", 4)}
+    assert len(cells) == (2 * 6 + 2 * 2) * 6
+    # --exclude adds patterns; a preset's own exclusions lapse when the engines
+    # are chosen by hand.
+    cells = bm.build_cells(_args(experiment="handler", engines="uvloop-proto-app",
+                                 exclude="*/thread/*"))
+    assert {(c[1], c[2]) for c in cells} == {("process", 1), ("process", 2), ("process", 4)}
+    # The load preset makes the connection count part of the cell.
+    cells = bm.build_cells(_args(experiment="load"))
+    assert {c[6] for c in cells} == {16, 64, 400, 1600}
+    assert len(cells) == 5 * 2 * 4
+    cells = bm.build_cells(_args(experiment="batch", conns_list="8 32"))
+    assert {c[6] for c in cells} == {8, 32} and len(cells) == 12
+
+
+def test_parse_proc_switches():
+    log = ("[proc] cpu_ns=5 nvcsw=10 nivcsw=3\n[worker 0] requests=4\n"
+           "[proc] cpu_ns=7 nvcsw=32 nivcsw=1\n")
+    assert bm.parse_proc_switches(log) == (42, 4)
+    assert bm.parse_proc_cpu(log) == 12
+    assert bm.parse_proc_switches("[proc] cpu_ns=5\n") == (None, None)
 
 
 def test_summarize_handler_columns_and_old_results():

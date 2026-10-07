@@ -21,12 +21,18 @@ those runs, so it is not a pre-registered test:
   `io_uring_enter` changes throughput little.
 - **Not supported** otherwise; the paper then reports what the data shows.
 
-Outcome: met in part. The first condition holds at four workers and fails at
-one; the second holds for caps of 16 and above. The claim as worded above is
-therefore not supported for a single worker. What the data supports is narrower
-(the interface and batching set one worker's speed; loop placement and GIL
-handling decide whether worker threads scale), and that narrower claim was
-formulated after seeing the results.
+Outcome: not met. With one worker the two factors matter about equally
+(interface 1.14-1.25x, loop 1.05-1.15x). With four worker threads a Python loop
+on `io_uring` scales nearly as well as the C loop (2.21x against 2.34x) once it
+releases the GIL around its submitting call, so loop placement does not decide
+scaling either. The batch condition holds only for caps of 16 and above.
+
+What the data supports was formulated after seeing the results: thread scaling
+under the GIL is governed by how much of a request runs under the GIL and by how
+often the GIL changes hands per request; batching matters to threads because it
+batches those hand-offs. An earlier run of `factorial`, in which `py-uring` held
+the GIL while submitting, appeared to show that Python loops cannot scale; it is
+kept under `benchmarks/results/superseded/`.
 
 ## Setup
 
@@ -56,15 +62,25 @@ workers on 4 vCPUs" is only 2 cores.
 Run each with `python3 benchmarks/bench_matrix.py --experiment <name>` on the
 client, with `SERVER`, `SERVER_IP` and `IMAGE` set (see the README).
 
+`bash benchmarks/run_paper_experiments.sh` runs all of them for the paper at the
+checked-out commit: it refuses to start if tracked files differ from that
+commit, sends the commit to the server, builds both images from it there
+(`uringpy:<commit>` and `uringpy:<commit>t`), runs the test suite inside each
+image and stops if it fails, runs the contention probe and the handler thread
+control, and then the experiments on both builds. All result folders of one
+such run therefore carry one commit in their name and in `meta.json`.
+
 | Name | Question it answers | Engines | Modes | Workers | Swept |
 | --- | --- | --- | --- | --- | --- |
-| `scaling` | Does throughput grow with workers in one interpreter, and how does that compare with one process per worker? | uringpy, asyncio, asyncio-proto | thread, process | 1, 2, 4 | — |
-| `factorial` | Is the gain from the system-call interface or from where the loop runs? | uringpy, c-epoll, py-uring, py-epoll, and py-uring-held for comparison | thread | 1, 2, 4 | — |
+| `scaling` | Does throughput grow with workers in one interpreter, and how does that compare with one process per worker? | uringpy, asyncio, asyncio-proto, uvloop, uvloop-proto | thread, process | 1, 2, 3, 4 | — |
+| `factorial` | Is the gain from the system-call interface or from where the loop runs? And is it the number of GIL hand-offs that decides thread scaling, with the system calls unchanged? | uringpy, c-epoll, py-uring, py-epoll, py-epoll-batch, py-uring-held | thread, process | 1, 2, 4 | — |
 | `batch` | How much does batching completions per system call contribute? | uringpy | thread | 1 | batch cap 1, 4, 16, 64, 256, none |
-| `app` | What happens once every request runs Python code? | uringpy-app, uringpy-app-batch, asyncio-app, asyncio-proto-app, uvloop-proto-app | thread, process | 1, 2, 4 | — |
-| `handler` | How does thread scaling depend on how long each request holds the GIL, and on how often the GIL changes hands? | uringpy-app, uringpy-app-batch | thread, process | 1, 2, 4 | handler work 0 … 3000 iterations |
+| `app` | What happens once every request runs Python code, and does taking the GIL once per batch help an `epoll` reactor as much as an `io_uring` one? | uringpy-app, uringpy-app-batch, c-epoll-app, c-epoll-app-batch, asyncio-app, asyncio-proto-app, uvloop-proto-app | thread, process | 1, 2, 4 | — |
+| `gilbatch` | Does thread scaling follow the number of requests served per GIL acquisition? | uringpy-app, uringpy-app-batch1 … batch64, uringpy-app-batch | thread | 1, 2, 4 | at most 1, 2, 4, 8, 16, 64 or all pending requests per acquisition |
+| `handler` | How does thread scaling depend on how long each request holds the GIL, and where do worker threads stop paying against one process per worker? | uringpy-app, uringpy-app-batch (threads and processes); asyncio-proto-app, uvloop-proto-app (processes, 1 and 4 workers) | thread, process | 1, 2, 4 | handler work 0 … 3000 iterations |
+| `load` | Do the results hold at other loads than 400 connections? | uringpy, py-uring, py-epoll, uringpy-app, uringpy-app-batch | thread | 1, 4 | 16, 64, 400, 1600 connections |
 | `size` | Where does the advantage end as responses grow? | uringpy, asyncio-proto | process | 4 | body 64 B … 1 MiB |
-| `baselines` | How do other event loops and the faster asyncio API compare? | asyncio, asyncio-proto, uvloop, uvloop-proto | thread, process | 1, 4 | — |
+| `baselines` | How do other event loops and the faster asyncio API compare? (now part of `scaling`) | asyncio, asyncio-proto, uvloop, uvloop-proto | thread, process | 1, 4 | — |
 
 The 2x2 design of `factorial`:
 
@@ -78,10 +94,25 @@ they differ only in how the I/O loop is built. One difference between the two
 Python loops is not the interface and has to be kept in mind: `py-epoll` makes
 its system calls through CPython's socket objects, which release the GIL around
 each call, and `py-uring` releases it while waiting for completions and while
-submitting. `py-uring-held` is `py-uring` keeping the GIL while it submits (the
-kernel performs the queued sends inside that call), which is how `py-uring`
-behaved in the runs of 2026-10-06 made at commit `b60fe24`. It is run next to
-the 2x2 to show what that choice alone does. Defaults: 5 repetitions of 20 s
+submitting. So for these two loops the number of system calls and the number of
+GIL releases are the same quantity, and the 2x2 alone cannot tell which of the
+two decides thread scaling. Two further engines separate them:
+
+| Engine | System calls per request | GIL releases per request | What it tests |
+| --- | --- | --- | --- |
+| `py-epoll-batch` | as `py-epoll` (`epoll_wait`, `recv`, `send`) | about two per loop pass: one for `epoll_wait`, one for all the `recv` and `send` calls of that pass, made by `uringpy.BatchIO` with the GIL released | same interface and same system calls as `py-epoll`, fewer hand-offs |
+| `py-uring-held` | as `py-uring` | one per loop pass: the wait only; the submit keeps the GIL | same interface as `py-uring`, with the GIL held across the kernel's send work (how `py-uring` behaved in the runs of 2026-10-06 at commit `b60fe24`) |
+
+If hand-offs decide thread scaling, `py-epoll-batch` scales like `py-uring`
+although it uses `epoll`. If it scales like `py-epoll`, the hand-off explanation
+is wrong. The same question is asked of the handler reactors: `c-epoll-app` and
+`c-epoll-app-batch` are the `epoll` reactor calling the same Python handler,
+taking the GIL once per request and once per batch of ready sockets.
+
+The same conditions hold for every engine: the listening socket has a backlog
+of 1024 and `TCP_NODELAY`, set once in `make_reuseport_listener` and passed to
+`asyncio` and `uvloop` as well; every server process reports its CPU time and
+its context switches from `getrusage` when it stops. Defaults: 5 repetitions of 20 s
 after a 5 s warm-up, 400 keep-alive connections, one `wrk` thread per client
 CPU. Repetitions are interleaved: every cell is run once in shuffled order, then
 every cell again, with a fresh server process for every run.
@@ -112,6 +143,9 @@ Columns of `runs.csv` that the formulas use:
 | `srv_cpu_ns` | server | user + system CPU time of the server processes |
 | `srv_handler_calls`, `srv_gil_hold_ns`, `srv_gil_wait_ns` | server counters | handler calls and time spent holding / waiting for the GIL |
 | `srv_gil_acquires` | server counters | GIL acquisitions made for handler calls: equal to the calls for `uringpy-app`, fewer for `uringpy-app-batch` |
+| `srv_gil_releases` | server counters | for the Python loops: how often the loop released the GIL (one per system call for `py-epoll`; one per wait and one per submit for `py-uring`; one per `epoll_wait` and one per batch of socket calls for `py-epoll-batch`) |
+| `srv_nvcsw`, `srv_nivcsw` | `getrusage` in the server processes | voluntary and involuntary context switches; a thread that sleeps waiting for the GIL, or for I/O, counts one voluntary switch |
+| `conns` | driver | keep-alive connections opened by `wrk` for this run |
 | `srv_python`, `srv_gil` | server | interpreter version and GIL state at start-up |
 
 Server counters cover the server's whole life, warm-up included. Ratios of two
@@ -138,10 +172,13 @@ pooled, so a trial or an aborted run must not be left in `benchmarks/results/`.
 
 | Table | Experiment(s) | Shows |
 | --- | --- | --- |
+| `tab_probe` | `probe-*.txt` (output of `gil_experiment.py`) | the contention probe, mean and fastest repetition |
 | `tab_factorial`, `tab_effects` | `factorial` | the 2x2 design, and each factor's effect with the other held fixed |
+| `tab_ladder` | `factorial`, `app` | thread scaling against measured GIL hand-offs per request |
 | `tab_batch` | `batch` | throughput against the batch cap |
 | `tab_scaling` | `scaling` (both builds), `baselines` | throughput at 1 to 4 workers, scaling, busy cores |
-| `tab_app` | `app` (both builds) | the same with a Python handler per request |
+| `tab_app` | `app` (both builds) | the same with a Python handler per request, GIL taken per request and per batch |
+| `tab_handler` | `handler` (both builds) | handler cost swept: GIL hold and wait time, the bound, measured scaling, GIL utilisation |
 | `tab_size` | `size` | throughput and data rate against response size |
 
 How the published runs differ from the presets above:
@@ -149,14 +186,30 @@ How the published runs differ from the presets above:
 - `scaling` was run with `--workers "1 2 3 4"` (the preset is 1, 2, 4).
 - `baselines` was run with `--engines "uvloop uvloop-proto"`, because the two
   `asyncio` engines were already in `scaling`.
-- The runs of 2026-10-06 up to and including `size` were made at commit
-  `b60fe24`, before the `handler_work`, `srv_cpu_ns`, `srv_handler_calls`,
-  `srv_gil_hold_ns` and `srv_gil_wait_ns` columns existed, so their `runs.csv`
-  files do not have them. Each `meta.json` records the commit and image used.
+- `handler` was run in four parts: `uringpy-app` in thread and process mode;
+  `asyncio-app` with `--modes thread --workers "1 4"`; `uringpy-app` on the
+  free-threaded image with `--modes thread`; and `uringpy-app-batch` with
+  `--modes thread`. The first three used the images `uringpy:314h` and
+  `uringpy:314th` (commit `5b28fd1`), the last `uringpy:314r` (commit
+  `d9bc686`), so the per-request and per-batch rows of `tab_handler` are not
+  interleaved with each other. They are in `app`.
+- `app` on the free-threaded image was run without `uvloop-proto-app`.
+- Three versions of the code were used as it was revised: `b60fe24` (`scaling`,
+  `batch`, `baselines`), `5b28fd1` (first three parts of `handler`) and
+  `d9bc686` (`factorial`, `app`, `size`, last part of `handler`). Each
+  `meta.json` records the commit and image. Runs made at `b60fe24` lack the
+  `handler_work`, `srv_cpu_ns`, `srv_handler_calls`, `srv_gil_*` columns.
+- `benchmarks/results/superseded/` holds earlier runs of `factorial`, `app` and
+  `size` that the runs above replace: `factorial` because `py-uring` then held
+  the GIL while submitting, `app` and `size` because they lacked the stronger
+  baselines. `make_tables.py` does not read that folder.
+- `handler-thread-control-*.txt` is the output of
+  `benchmarks/handler_thread_control.py`: the handler called from plain Python
+  threads, without the runtime, on both images.
 
 Comparisons inside one experiment are interleaved. Comparisons across two
-experiments are not: one `uringpy` worker measured 140.7, 146.1 and 144.0
-thousand requests per second in three experiments, a spread of 4%. Comparisons
+experiments are not: one `uringpy` worker measured 140.7, 140.3 and 144.0
+thousand requests per second in three experiments, a spread of 3%. Comparisons
 between the GIL build and the free-threaded build are also across experiments.
 
 ## Formulas
@@ -217,13 +270,27 @@ the GIL) gives `S(N) <= 1`. In `make_tables.py`, `f = t_p * m_1`, with `t_p`
 measured at one worker and `m_1` the one-worker throughput (a saturated worker
 serves `1 / (t_c + t_p)` requests per second).
 
-The bound is an upper bound and can be far from tight. With the default handler
-it is about 7 while measured thread scaling stops at 1.57: what it leaves out is
-the cost of acquiring a contended lock once per request, which the measured
-wait `w` shows directly. `uringpy-app-batch` (`URingEngine.set_gil_batching`)
-tests that reading: it takes the GIL once for all requests found in one pass
-over the completion queue, which leaves `f` unchanged and cuts the number of
-acquisitions per request. In
+The bound counts only the time the GIL is held, and can be far from tight. With
+the default handler `1/f` is about 6.8 while measured thread scaling stops at
+1.55: what the bound leaves out is the cost of handing the GIL from one thread
+to another. With `h` hand-offs per request, each costing `c` when another
+thread is waiting, the GIL is unavailable for `t_p + h*c` per request, so
+
+- **Bound with hand-offs**: `S(N) <= min(N, 1 / (f + h * c * m_1))`
+- **GIL acquisitions per request** (`h` for the C reactor with a handler):
+  `srv_gil_acquires / srv_handler_calls`; 1 for `uringpy-app`, about 0.02 for
+  `uringpy-app-batch` (`URingEngine.set_gil_batching`), which takes the GIL
+  once for all requests found in one pass over the completion queue.
+- **GIL releases per request** (`h` for the Python loops): their counted system
+  calls per request, since every system call they make releases the GIL.
+- **GIL utilisation at `N` workers**: `U_N = m_N * t_p,N`, the share of each
+  second the GIL is held running handlers (`t_p,N` measured at `N` workers).
+- **Hand-off cost**, where the GIL is the limit and `h = 1`:
+  `c = 1 / m_N - t_p,N`. It came out between 2.9 and 5.7 microseconds.
+
+With GIL batching and long handlers, the interpreter's switch interval
+interrupts a batch, so the recorded hold then includes time waiting to resume;
+`make_tables.py` prints "n/a" for the utilisation in those cells. In
 process mode each worker has its own GIL, so the bound is `N` whatever `f` is.
 
 ## Pitfalls and how each is handled
@@ -261,7 +328,7 @@ What is not handled is listed under Limits and stated in the paper.
 - One protocol, one kernel, one machine family, and a server with few cores.
 - The server's four cores are shared by the workers and the kernel's network
   stack: one worker already keeps about 1.2 cores busy, so scaling at four
-  workers is about 2.3 to 2.7 for every engine that scales at all.
+  workers is about 2.1 to 2.7 for every engine that scales at all.
 - With response bodies of 16 KiB or more the network path (about 15.7 Gbit/s
   between the two machines) was the limit, not the server; those `size` cells
   measure the network.
@@ -270,3 +337,14 @@ What is not handled is listed under Limits and stated in the paper.
   lower bound for a full event loop.
 - Repetitions are interleaved within an experiment, not across experiments (see
   "Published results and tables").
+- GIL hand-offs are counted for the engines of this repository, not for
+  `asyncio` or `uvloop`. The batch cap was varied only for the C reactor on one
+  worker.
+- With 300 or more added iterations the handler does not scale across threads
+  on the free-threaded build either. `handler_thread_control.py` reproduces
+  that with plain Python threads and no runtime, so it belongs to the
+  interpreter and this handler; its cause was not identified.
+- Runs of the `handler` experiment with 1000 or 3000 added iterations reported
+  socket errors from `wrk` for up to 0.4% of requests.
+- The contention probe is reliable only for one competing thread on a 4-core
+  machine: with two or three, the timings of both loops scatter widely.
