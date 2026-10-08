@@ -205,6 +205,8 @@ once, at exit, and costs nothing per request.
 | `check313`, `loops313`, `app313` (`PROFILE=small`) | the same | an image built from `Dockerfile.bench` with CPython 3.13, plus `uringcore` and `uringloop` (`Dockerfile.loops`). `check_loop.py` first tests each loop: one connection with 20,000 requests one after another, then 400 connections with 3 requests each. The loops that pass are measured against `asyncio`, `uvloop` and `uringpy` (streams and Protocol API, threads and processes, 1, 2 and 4 workers), and with the handler (Protocol API, 1 and 4 workers) |
 | `L-scaling`, `L-factorial`, `L-app`, `L-handler` (`PROFILE=large`) | the same VMs resized to a server with more cores (8 or 16) and a client with twice as many | `scaling` (the runtime and the two Protocol API baselines), `factorial`, `app` and `handler` (0, 10, 30 and 100 added iterations) at 1, 4 and all cores, threads and processes, 100 connections per server core |
 | `L-openloop` (`PROFILE=large`) | the same | open loop: `wrk2` (built on the client; its commit is logged) sends requests at fixed total rates of 50, 100, 150, 200, 300 and 400 thousand per second (and 600 thousand with 16 cores) to the default handler on all cores: the reactor with the GIL taken per request (threads), with GIL batching (threads and processes), and `uvloop` (processes, Protocol API). Runs of 30 s; latency percentiles are corrected for coordinated omission by `wrk2`. Results in `benchmarks/results-revision/large-openloop/` |
+| `C4`, `C3`, `C2` (`PROFILE=cores`) | the four-core server of the main run with 4, 3 and 2 CPUs online (the others taken offline with `/sys/devices/system/cpu/cpu*/online`, so the kernel's network processing is confined to the same CPUs; the host and a container must both report that many CPUs, or the stage stops) | `uringpy`, `py-epoll`, `uringpy-app`, `uringpy-app-batch`, `c-epoll-app`, `c-epoll-app-batch`: one thread, and as many threads and as many processes as CPUs online; 400 connections, 5 repetitions. Run with 4 CPUs first, then 3, then 2, in one session. Results in `benchmarks/results-revision/cores-k<CPUs>/` |
+| `O-openloop` (`PROFILE=cores`) | the same, all four CPUs online | open loop again with `wrk2` at 10, 25, 50, 100, 150, 200, 250 and 300 thousand requests per second, 400 connections, runs of 30 s: the reactor with the GIL per request and with GIL batching, each as four threads and as four processes, and `uvloop` processes. Per-request processes do the same GIL work per request as per-request threads but share no lock, so they are the uncontended reference the first open-loop run lacked. Results in `benchmarks/results-revision/cores-openloop/` |
 
 Expectations, written before any of these runs (`ĝ` is the counted upper
 limit used so far, `gsw` the observed hand-offs per request):
@@ -268,6 +270,42 @@ limit used so far, `gsw` the observed hand-offs per request):
       measured in the closed-loop runs on the same machine; the processes of the
       same reactor sustain the highest rates of the four configurations.
 
+5. **Fewer CPUs** (added on 2026-10-08, after the runs above and before any
+   `PROFILE=cores` run). `k` is the number of CPUs online, 2, 3 or 4; `S_k`
+   is throughput at `k` workers over one thread with the same `k` CPUs online.
+   a. At every `k`, the batched reactors (`uringpy-app-batch`,
+      `c-epoll-app-batch`) as `k` threads deliver at least 0.85 of the same
+      reactor as `k` processes.
+   b. For each interface, the ratio of batched to per-request threads
+      (`uringpy-app-batch` over `uringpy-app`, `c-epoll-app-batch` over
+      `c-epoll-app`, both at `k` threads) grows with `k`: it is larger at 4
+      than at 3, and at 3 than at 2. Contention, not the interface, is what
+      costs more as CPUs are added.
+   c. Voluntary context switches per request of `c-epoll-app` and `py-epoll`
+      threads rise with `k`; those of the two batched reactors stay below 0.1
+      at every `k`.
+   d. At every `k`, the rank correlation between `S_k` and voluntary context
+      switches per request over the thread configurations is below -0.7.
+   e. `uringpy` (no Python per request) threads come within 10% of its
+      processes at every `k`.
+   f. `py-epoll` and `c-epoll-app` threads scale below 1.2 at every `k`.
+6. **Open loop with an uncontended reference** (added on 2026-10-08, before
+   the `O-openloop` run). Per-request processes are the reference: the same
+   reactor and GIL work per request, without a shared lock.
+   a. At every rate that both sustain (at least 95% of offered), per-request
+      threads have a higher median latency than per-request processes, and
+      the ratio of the two medians grows with the rate.
+   b. At 10 and 25 thousand requests per second the medians of per-request
+      threads and processes are within 25% of each other: at light load
+      contention costs little latency.
+   c. At rates up to 100 thousand per second, batched threads have a median
+      within 25% of batched processes.
+   d. Per-request processes sustain at least the highest rate that batched
+      threads sustain; per-request threads sustain the lowest of the four
+      reactor configurations.
+   e. Expectation 4a replicates: batched threads answer faster (median and
+      99th percentile) than per-request threads at every rate both sustain.
+
 Outcome of the `PROFILE=small` run at commit `4780b0e` (2026-10-08, all
 625 runs succeeded). The check on Python 3.13.7 (`small-py313/loopcheck-*.txt`):
 `asyncio` and `uvloop` passed. `uringcore` 0.9.1, on a version it states it
@@ -279,6 +317,55 @@ looked for its loop class under names that version 0.1.0 does not use
 (`IouringProactorEventLoop` is the one it exports), so the server did not
 start. That was our error, not the package's. The loader was corrected and the
 check repeated at the next commit (stages `build313` and `check313`).
+
+Repeated check at commit `58e3cdc` (`small-py313/loopcheck-58e3cdc-*.txt`).
+`uringcore` failed again in the same way (995 and 993 requests on one
+connection; 576 and 601 of 1200 replies with 400 connections), so its failure
+is reproducible. `uringloop` now started. With the streams API its worker
+aborted at the first request with `malloc(): mismatching next->prev_size
+(unsorted)`, a heap corruption inside the process, and answered nothing. With
+the Protocol API it answered all 20,000 requests on one connection, but with
+400 connections only 798 of 1200: its loop stopped when `io_uring_wait_cqe`
+returned `EINTR`, which it raises (`InterruptedError`) instead of retrying.
+A follow-up check of the Protocol API alone (`check_loop.py --sequential 10`)
+gave 48 of 48 replies with 16 connections and 176 of 192 with 64. By
+expectation 3a neither loop was measured. In short: on a Python version both
+packages support, neither `io_uring`-based `asyncio` loop serves the load of
+these experiments; `uringloop` works with a few connections at a time.
+
+Outcome against the expectations (tables from
+`python3 benchmarks/make_revision_tables.py`, numbers in
+`benchmarks/results-revision/tables/revision.tex`):
+
+- 1a partly refuted. The engines that give up the GIL per pass or per batch
+  showed 0.013 to 0.032 observed hand-offs per request, the C loops none, and
+  `py-epoll`, `c-epoll-app`, `asyncio` and `uvloop` 0.32 to 1.46. But the
+  `io_uring` reactor that takes the GIL per request showed only 0.080: its
+  threads are woken (0.29 voluntary context switches per request) but the
+  thread that released the lock usually takes it back first.
+- 1b holds except for the hold-time control. The 10 configurations with
+  `S_4 >= 2` show at most 0.032; the 6 with `S_4 < 1` at least 0.317, except
+  `py-uring-held` (0.000), which never gives up the lock and does not scale
+  because it holds it.
+- 1c confirmed: 0.914 for `c-epoll-app` against 0.080 for `uringpy-app`.
+- 1d confirmed: from 0.097 at a cap of 1 to 0.021 at 64.
+- 1e refuted. A day later, one-worker throughput was 0.89 to 1.00 times the
+  main run's (median 0.93), four-worker 0.94 to 1.09 (median 0.99); 33 of 79
+  configurations were within 5%. The paper compares observed hand-offs only
+  with scaling from the same run.
+- 2 not run: the account's limit of 12 vCPUs allowed no larger server with a
+  client able to load it.
+- 3a applies to both loops (above); 3b to 3d were not reached.
+- 4a confirmed and exceeded: below saturation batched threads had lower
+  median and 99th-percentile latency than threads taking the GIL per request
+  at every rate. 4b confirmed: per-request threads fell behind first (at 200k
+  they delivered 192k with a median of 461 ms). 4c partly: batched threads
+  stopped at 264k, their closed-loop maximum, well below the estimated lock
+  capacity (419k); the processes reached 277k, the highest.
+
+The open-loop run was made with `PROFILE=large ONLY="wrk2 build tests
+L-openloop"` on the four-core pair, so its folder is
+`results-revision/large-openloop/` although the server had four cores.
 
 The 2x2 design of `factorial`:
 

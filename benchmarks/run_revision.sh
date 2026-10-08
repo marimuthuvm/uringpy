@@ -7,6 +7,7 @@
 #
 #     PROFILE=small nohup setsid bash benchmarks/run_revision.sh > ~/revision-small.log 2>&1 < /dev/null &
 #     PROFILE=large nohup setsid bash benchmarks/run_revision.sh > ~/revision-large.log 2>&1 < /dev/null &
+#     PROFILE=cores nohup setsid bash benchmarks/run_revision.sh > ~/revision-cores.log 2>&1 < /dev/null &
 #
 # PROFILE=small  on the four-core server of the main run:
 #   handoffs   the thread-mode configurations of factorial, app, gilbatch and
@@ -23,6 +24,18 @@
 #   threads and processes, with the hand-off counter; then open-loop load
 #   (wrk2, built on the client) at fixed request rates, to compare latency
 #   below saturation (results in benchmarks/results-revision/large-openloop/).
+# PROFILE=cores  on the four-core server of the main run:
+#   cores      the handler reactors (GIL per request and per batch, io_uring
+#              and epoll), the C loop and the Python epoll loop with 4, 3 and
+#              2 of the server's CPUs online (the others are taken offline,
+#              so the kernel's network processing has the same CPUs), one
+#              thread, and as many threads and processes as CPUs; results in
+#              benchmarks/results-revision/cores-k<CPUs>/. All CPUs are put
+#              back online at the end, also when the run stops early.
+#   openloop   open-loop load again, now with the per-request reactor also
+#              as processes (the same per-request GIL work without a shared
+#              lock) and at lower rates; results in
+#              benchmarks/results-revision/cores-openloop/.
 #
 # Results go to benchmarks/results-revision/<PROFILE>/ (kept apart from the
 # main run's folders, which make_tables.py pools) and are packed into
@@ -41,7 +54,7 @@ cd "$REPO" || exit 1
 [ -f "$HOME/bench.env" ] && . "$HOME/bench.env"
 : "${SERVER:?set SERVER=user@host}"
 : "${SERVER_IP:?set SERVER_IP}"
-: "${PROFILE:?set PROFILE=small or PROFILE=large}"
+: "${PROFILE:?set PROFILE=small, large or cores}"
 export SERVER SERVER_IP
 REPS="${REPS:-5}"
 ONLY="${ONLY:-}"
@@ -50,7 +63,7 @@ LIMITS="--ulimit nofile=65536:65536 --ulimit memlock=-1:-1"
 SSH=(ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ServerAliveInterval=30 "$SERVER")
 say() { echo "== $(date -u +%H:%M:%SZ) $*"; }
 
-case "$PROFILE" in small|large) ;; *) say "PROFILE must be small or large"; exit 1 ;; esac
+case "$PROFILE" in small|large|cores) ;; *) say "PROFILE must be small, large or cores"; exit 1 ;; esac
 
 exec 9> "$HOME/.uringpy-paper-run.lock"
 if ! flock -n 9; then
@@ -74,6 +87,25 @@ FAILED=""
 mkdir -p "$OUT"; [ "$PROFILE" = small ] && mkdir -p "$OUT313"
 touch "$DONE"
 
+# set_online <k>: the server's CPUs 0 to k-1 online, the others offline; then
+# check that the host and a container both see k CPUs.
+set_online() {
+    local k="$1" host box
+    "${SSH[@]}" "sudo -n bash -c 'for d in /sys/devices/system/cpu/cpu[0-9]*; do \
+        [ -f \$d/online ] || continue; n=\${d##*cpu}; \
+        if [ \$n -lt $k ]; then echo 1 > \$d/online; else echo 0 > \$d/online; fi; done'" || return 1
+    host="$("${SSH[@]}" nproc)"
+    box="$("${SSH[@]}" "docker run --rm --entrypoint nproc $IMAGE 2>/dev/null || nproc")"
+    say "server CPUs online: host $host, container $box (wanted $k)"
+    [ "$host" = "$k" ] && [ "$box" = "$k" ]
+}
+if [ "$PROFILE" = cores ]; then
+    # Every CPU the server has, whatever an earlier run left offline.
+    ALLCPU="$("${SSH[@]}" "ls -d /sys/devices/system/cpu/cpu[0-9]* | wc -l")"
+    "${SSH[@]}" "sudo -n true" || { say "no passwordless sudo on the server: cannot take CPUs offline"; exit 1; }
+    trap 'set_online "$ALLCPU" > /dev/null 2>&1' EXIT
+    "${SSH[@]}" "sudo -n bash -c 'for d in /sys/devices/system/cpu/cpu[0-9]*/online; do echo 1 > \$d; done'"
+fi
 CORES="$("${SSH[@]}" nproc)"
 CLIENT_CORES="$(nproc)"
 say "commit $COMMIT  profile $PROFILE  server cores $CORES  client cores $CLIENT_CORES  reps $REPS"
@@ -232,6 +264,34 @@ if [ "$PROFILE" = small ]; then
     stage check313   check_loops
     stage loops313   loops313
     stage app313     loops313_app
+elif [ "$PROFILE" = cores ]; then
+    CONNS="${CONNS:-400}"
+    ENGINES="uringpy py-epoll uringpy-app uringpy-app-batch c-epoll-app c-epoll-app-batch"
+    RATES="${RATES:-10000 25000 50000 100000 150000 200000 250000 300000}"
+    say "connections $CONNS  CPUs online in turn: 4 3 2  open-loop rates $RATES"
+    stage wrk2       build_wrk2
+    stage build      build_main               || exit 1
+    stage tests      run_tests "$IMAGE"       || exit 1
+    # Most CPUs first: if CPUs taken offline did not come back for containers,
+    # the check in set_online stops the run instead of measuring fewer CPUs.
+    for k in 4 3 2; do
+        [ "$k" -le "$CORES" ] || continue
+        wanted "C$k" || continue
+        grep -qxF "C$k" "$DONE" && { say "skip   C$k (already done)"; continue; }
+        set_online "$k" || { say "FAILED C$k: could not set $k CPUs online"; FAILED="$FAILED C$k"; break; }
+        OUTDIR="${OUT}-k$k" stage "C$k" bench "$IMAGE" app --engines "$ENGINES" \
+            --modes "thread process" --workers "1 $k" --exclude "*/process/1" \
+            --conns "$CONNS" --docker-opts "--ulimit nofile=65536:65536"
+    done
+    set_online "$CORES" || { say "could not put all CPUs back online"; exit 1; }
+    if [ -x "$WRK2" ]; then
+        OUTDIR="${OUT}-openloop" stage O-openloop bench "$IMAGE" openloop \
+            --modes "thread process" --workers "$CORES" --conns "$CONNS" --rates "$RATES" \
+            --duration 30 --exclude "uvloop-proto-app/thread/*" \
+            --wrk "$WRK2" --docker-opts "--ulimit nofile=65536:65536"
+    else
+        say "skip   O-openloop: wrk2 is not available"
+    fi
 else
     CONNS="${CONNS:-$((100 * CORES))}"
     # Workers: powers of two up to the server's cores, and the cores themselves.
@@ -267,7 +327,7 @@ fi
 
 cd "$REPO/benchmarks/results-revision" || exit 1
 packed="$PROFILE"
-for extra in "${PROFILE}-py313" "${PROFILE}-openloop"; do
+for extra in "${PROFILE}"-*; do
     [ -n "$(ls -A "$extra" 2>/dev/null)" ] && packed="$packed $extra"
 done
 # shellcheck disable=SC2086
