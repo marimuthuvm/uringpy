@@ -460,10 +460,15 @@ def _new_loop(name):
         return loop
     if name == "uringloop":
         import uringloop
-        # The class has been published under two names.
-        factory = (getattr(uringloop, "IoUringProactorEventLoop", None)
-                   or getattr(uringloop, "URingEventLoop"))
-        return factory()
+        # The loop class has been published under several names; 0.1.0 calls
+        # it IouringProactorEventLoop.
+        for name in ("IouringProactorEventLoop", "IoUringProactorEventLoop",
+                     "URingEventLoop"):
+            factory = getattr(uringloop, name, None)
+            if factory is not None:
+                return factory()
+        raise AttributeError("uringloop: no event loop class found among "
+                             + ", ".join(n for n in dir(uringloop) if not n.startswith("_")))
     return asyncio.new_event_loop()
 
 

@@ -41,6 +41,9 @@ and --exclude:
              API, one process per worker
   baselines  asyncio and uvloop only (subset of scaling)
   loops      asyncio, uvloop, uringcore, uringloop (needs the cross-runtime image)
+  openloop   requests sent at fixed rates (wrk2, --rates) to the handler reactor
+             with GIL taken per request and per batch, and to uvloop processes:
+             latency below saturation
 
 Output, in benchmarks/results/<experiment>-<UTC time>/:
   runs.csv     one row per measured run (raw data)
@@ -121,6 +124,13 @@ EXPERIMENTS = {
                               "uringpy-app-batch16", "uringpy-app-batch64",
                               "uringpy-app-batch"],
                      modes=["thread"], workers=[1, 2, 4], gil_timing=True),
+    # Open-loop load: wrk2 sends requests at fixed rates (--rates, requests per
+    # second in total) whatever the server's state, so latency below
+    # saturation can be compared. Needs wrk2 (--wrk).
+    "openloop": dict(engines=["uringpy-app", "uringpy-app-batch", "uvloop-proto-app"],
+                     modes=["thread", "process"], workers=[4],
+                     exclude=["uvloop-proto-app/thread/*", "uringpy-app/process/*"],
+                     rates=[50000, 100000, 150000, 200000, 300000, 400000]),
     # Offered load swept through the number of client connections: batch sizes,
     # and with them GIL hand-offs per request, depend on how much is waiting.
     "load": dict(engines=["uringpy", "py-uring", "py-epoll", "uringpy-app",
@@ -138,7 +148,7 @@ CSV_FIELDS = [
     "srv_completions", "srv_waits", "srv_handler_errors", "srv_handler_calls",
     "srv_gil_hold_ns", "srv_gil_wait_ns", "srv_gil_acquires", "srv_gil_releases",
     "srv_cpu_ns", "srv_nvcsw", "srv_nivcsw", "srv_python",
-    "srv_gil", "note", "srv_gil_switches",
+    "srv_gil", "note", "srv_gil_switches", "rate", "lat_p999_ms",
 ]
 
 # Two-sided 95% Student-t critical values, index = degrees of freedom.
@@ -210,7 +220,8 @@ def parse_wrk(output):
     out = {"rps": float("nan"), "requests": 0, "duration_s": float("nan"),
            "lat_p50_ms": float("nan"), "lat_p75_ms": float("nan"),
            "lat_p90_ms": float("nan"), "lat_p99_ms": float("nan"),
-           "lat_avg_ms": float("nan"), "transfer_mb_s": float("nan"),
+           "lat_avg_ms": float("nan"), "lat_p999_ms": float("nan"),
+           "transfer_mb_s": float("nan"),
            "socket_errors": 0, "non_2xx": 0}
     for line in output.splitlines():
         s = line.strip()
@@ -225,6 +236,14 @@ def parse_wrk(output):
         m = re.match(r"(50|75|90|99)%\s+(\S+)", s)
         if m:
             out[f"lat_p{m.group(1)}_ms"] = _to_ms(m.group(2))
+            continue
+        # wrk2 (open loop): " 50.000%    1.03ms", " 99.900%    3.14ms"
+        m = re.match(r"(\d+\.\d+)%\s+(\S+)$", s)
+        if m:
+            name = {50.0: "p50", 75.0: "p75", 90.0: "p90", 99.0: "p99",
+                    99.9: "p999"}.get(round(float(m.group(1)), 3))
+            if name:
+                out[f"lat_{name}_ms"] = _to_ms(m.group(2))
             continue
         m = re.match(r"Latency\s+(\S+)\s+\S+\s+\S+\s+\S+%", s)
         if m:
@@ -458,9 +477,12 @@ def wait_ready(url, timeout=15.0):
     return False
 
 
-def run_wrk(wrk, url, threads, conns, seconds):
-    return sh([wrk, f"-t{threads}", f"-c{conns}", f"-d{seconds}s", "--latency", url],
-              timeout=seconds + 60)
+def run_wrk(wrk, url, threads, conns, seconds, rate=0):
+    """wrk (closed loop), or wrk2 at a fixed total rate when rate > 0."""
+    cmd = [wrk, f"-t{threads}", f"-c{conns}", f"-d{seconds}s", "--latency"]
+    if rate:
+        cmd.append(f"-R{rate}")
+    return sh(cmd + [url], timeout=seconds + 60)
 
 
 def local_proc_stat():
@@ -468,13 +490,15 @@ def local_proc_stat():
         return f.read()
 
 
-def run_one(server, cell, args, url):
-    """Measure one cell once; returns a dict of CSV fields."""
+def run_one(server, cell, args, url, rate=0):
+    """Measure one cell once (at a fixed request rate if rate > 0); returns a
+    dict of CSV fields."""
     engine, mode, workers, resp_size, max_batch, handler_work, conns = cell
     threads = max(1, min(args.threads, conns))  # wrk needs connections >= threads
     row = {"engine": engine, "mode": mode, "workers": workers,
            "resp_size": resp_size, "max_batch": max_batch,
-           "handler_work": handler_work, "conns": conns, "status": "ok", "note": ""}
+           "handler_work": handler_work, "conns": conns, "rate": rate or "",
+           "status": "ok", "note": ""}
     env = {"URINGPY_STATS": 1, "RESP_SIZE": resp_size}
     if max_batch:
         env["URINGPY_MAX_BATCH"] = max_batch
@@ -488,9 +512,9 @@ def run_one(server, cell, args, url):
             row["status"] = "no-start"
             return row
         if args.warmup > 0:
-            run_wrk(args.wrk, url, threads, conns, args.warmup)
+            run_wrk(args.wrk, url, threads, conns, args.warmup, rate)
         c0, s0 = local_proc_stat(), server.proc_stat()
-        code, out = run_wrk(args.wrk, url, threads, conns, args.duration)
+        code, out = run_wrk(args.wrk, url, threads, conns, args.duration, rate)
         c1, s1 = local_proc_stat(), server.proc_stat()
         row.update(parse_wrk(out))
         if code != 0 or math.isnan(row["rps"]):
@@ -559,7 +583,7 @@ def summarize(rows, meta=None):
         # and so is conns (0 there: the run's --conns applied to every cell).
         key = (r["engine"], r["mode"], int(r["workers"]), int(r["resp_size"]),
                int(r["max_batch"]), int(r.get("handler_work") or 0),
-               int(r.get("conns") or 0))
+               int(r.get("conns") or 0), int(float(r.get("rate") or 0)))
         if key not in groups:
             groups[key] = []
             order.append(key)
@@ -568,7 +592,7 @@ def summarize(rows, meta=None):
     # Present cells in the order the experiment defines them, not run order.
     if meta and meta.get("cells"):
         rank = {tuple(c) + (0,) * (7 - len(c)): i for i, c in enumerate(meta["cells"])}
-        order.sort(key=lambda k: rank.get(k, len(rank)))
+        order.sort(key=lambda k: (rank.get(k[:7], len(rank)), k[7]))
 
     lines = ["# Benchmark summary", ""]
     if meta:
@@ -594,14 +618,14 @@ def summarize(rows, meta=None):
     lines += ["| engine | mode | workers | GIL | body B | batch cap | handler work | conns | n | req/s | ± 95% CI | CV % | scaling | p50 ms | p99 ms | server CPU % | busiest core % | client CPU % | syscalls/req | compl/enter | proc CPU µs/req | GIL hold µs/req | GIL wait µs/req | GIL rel. or acq./req | GIL switches/req | vol. ctx sw./req | flags |",
               "| --- | --- | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |"]
     for key in order:
-        engine, mode, workers, resp_size, max_batch, handler_work, conns = key
+        engine, mode, workers, resp_size, max_batch, handler_work, conns, rate = key
         runs = groups[key]
         good = [r for r in runs if r.get("status") == "ok"]
         rps = [v for v in (_num(r, "rps") for r in good) if not math.isnan(v)]
         m, sd = mean_sd(rps)
         hw = ci95(rps)
         cv = 100 * sd / m if rps and m and not math.isnan(sd) else float("nan")
-        base = groups.get((engine, mode, 1, resp_size, max_batch, handler_work, conns), [])
+        base = groups.get((engine, mode, 1, resp_size, max_batch, handler_work, conns, rate), [])
         base_rps = [v for v in (_num(r, "rps") for r in base if r.get("status") == "ok")
                     if not math.isnan(v)]
         scaling = "-"
@@ -656,13 +680,15 @@ def summarize(rows, meta=None):
             flags.append("socket errors or non-2xx responses")
         if any(_num(r, "srv_handler_errors") > 0 for r in good):
             flags.append("handler errors")
+        if rate and rps and m < 0.95 * rate:
+            flags.append("below the offered rate: saturated")
         gil = "/".join(sorted({r.get("srv_gil") for r in good if r.get("srv_gil")})) or "-"
         if not good:
             notes = sorted({r.get("note", "") for r in runs if r.get("note")})
             flags.append("no successful run" + (": " + "; ".join(notes) if notes else ""))
         lines.append(
             f"| {engine} | {mode} | {workers} | {gil} | {resp_size} | {max_batch or 'none'} "
-            f"| {handler_work} | {conns or '-'} | {len(rps)} "
+            f"| {handler_work} | {conns or '-'}{f' @{rate}/s' if rate else ''} | {len(rps)} "
             f"| {_f(m)} | {_f(hw)} | {_f(cv, 1)} | {scaling} "
             f"| {_f(_avg(good, 'lat_p50_ms'), 2)} | {_f(_avg(good, 'lat_p99_ms'), 2)} "
             f"| {_f(_avg(good, 'server_cpu_pct'), 1)} | {_f(_avg(good, 'server_max_core_pct'), 1)} "
@@ -763,6 +789,9 @@ def main(argv=None):
     ap.add_argument("--max-batch")
     ap.add_argument("--handler-work",
                     help="extra Python iterations per request for the app engines")
+    ap.add_argument("--rates",
+                    help="open loop: total request rates per second, each measured for "
+                         "every cell (needs wrk2 as --wrk)")
     ap.add_argument("--gil-timing", action="store_true",
                     help="record per-request GIL wait/hold time (uringpy-app)")
     args = ap.parse_args(argv)
@@ -804,6 +833,8 @@ def main(argv=None):
     seed = args.seed if args.seed is not None else random.SystemRandom().randrange(1 << 31)
     rng = random.Random(seed)
     cells = build_cells(args)
+    rates = (_ints(args.rates) if args.rates
+             else EXPERIMENTS[args.experiment].get("rates", [0]))
     started = datetime.datetime.now(datetime.timezone.utc)
     # The image tag goes into the folder name so runs on different interpreter
     # builds cannot be confused with each other.
@@ -816,13 +847,14 @@ def main(argv=None):
             "params": {"reps": args.reps, "duration": args.duration, "warmup": args.warmup,
                        "conns": args.conns, "threads": args.threads, "seed": seed,
                        "port": args.port, "url": url,
-                       "docker_opts": "" if args.local else args.docker_opts},
+                       "docker_opts": "" if args.local else args.docker_opts,
+                       "rates": rates if any(rates) else [], "wrk": args.wrk},
             "cells": [list(c) for c in cells],
             "client": describe_client(args.wrk), "server": server.describe()}
     with open(os.path.join(out_dir, "meta.json"), "w") as f:
         json.dump(meta, f, indent=2)
 
-    total = len(cells) * args.reps
+    total = len(cells) * len(rates) * args.reps
     per_run = args.duration + args.warmup + 8
     print(f"# {args.experiment}: {len(cells)} cells x {args.reps} repetitions = {total} runs, "
           f"about {total * per_run / 60:.0f} min. Results: {out_dir}", flush=True)
@@ -833,11 +865,11 @@ def main(argv=None):
         writer = csv.DictWriter(f, fieldnames=CSV_FIELDS, extrasaction="ignore")
         writer.writeheader()
         for rep in range(1, args.reps + 1):
-            order = list(cells)
+            order = [(cell, rate) for cell in cells for rate in rates]
             rng.shuffle(order)
-            for cell in order:
+            for cell, rate in order:
                 done += 1
-                row = run_one(server, cell, args, url)
+                row = run_one(server, cell, args, url, rate)
                 row.update(experiment=args.experiment, rep=rep, order=done)
                 writer.writerow(row)
                 f.flush()
@@ -845,7 +877,7 @@ def main(argv=None):
                 rps = row.get("rps", float("nan"))
                 print(f"[{done}/{total}] rep {rep} {cell[0]}/{cell[1]} w={cell[2]} "
                       f"size={cell[3]} batch={cell[4] or 'none'} work={cell[5]} "
-                      f"conns={cell[6]}: "
+                      f"conns={cell[6]}" + (f" rate={rate}/s" if rate else "") + ": "
                       f"{row['status']} {_f(rps)} req/s "
                       f"(server CPU {_f(row.get('server_cpu_pct', float('nan')), 0)}%, "
                       f"client CPU {_f(row.get('client_cpu_pct', float('nan')), 0)}%)"

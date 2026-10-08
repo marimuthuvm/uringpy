@@ -20,7 +20,9 @@
 #              asyncio, uvloop and uringpy, without and with a handler.
 # PROFILE=large  on a server with more cores (the same VMs, resized):
 #   scaling, factorial, app and handler at 1, 4 and all cores of the server,
-#   threads and processes, with the hand-off counter.
+#   threads and processes, with the hand-off counter; then open-loop load
+#   (wrk2, built on the client) at fixed request rates, to compare latency
+#   below saturation (results in benchmarks/results-revision/large-openloop/).
 #
 # Results go to benchmarks/results-revision/<PROFILE>/ (kept apart from the
 # main run's folders, which make_tables.py pools) and are packed into
@@ -147,8 +149,9 @@ run_tests() {  # run_tests <image>
 }
 
 bench() {  # bench <image> <experiment> [driver options...]
-    local image="$1" experiment="$2" out="$OUT"; shift 2
+    local image="$1" experiment="$2" out="${OUTDIR:-$OUT}"; shift 2
     [ "$image" = "$LOOPS313" ] && out="$OUT313"
+    mkdir -p "$out"
     IMAGE="$image" python3 benchmarks/bench_matrix.py --experiment "$experiment" \
         --reps "$REPS" --out "$out" "$@"
 }
@@ -197,6 +200,21 @@ loops313_app() {
         --docker-opts "$LIMITS"
 }
 
+# wrk2: the open-loop variant of wrk (fixed request rate, latency corrected for
+# coordinated omission). Built once on the client from its repository.
+WRK2="$HOME/wrk2/wrk"
+build_wrk2() {
+    if [ ! -x "$WRK2" ]; then
+        sudo -n apt-get install -y -q build-essential libssl-dev zlib1g-dev git > /dev/null 2>&1 || true
+        rm -rf "$HOME/wrk2"
+        git clone -q https://github.com/giltene/wrk2 "$HOME/wrk2" || return 1
+        make -C "$HOME/wrk2" -j"$(nproc)" > "$HOME/wrk2-build.log" 2>&1 || {
+            tail -n 5 "$HOME/wrk2-build.log"; return 1; }
+    fi
+    say "wrk2 at commit $(git -C "$HOME/wrk2" rev-parse --short HEAD): $("$WRK2" -v 2>&1 | head -n 1)"
+    [ -x "$WRK2" ]
+}
+
 if [ "$PROFILE" = small ]; then
     stage build      build_main               || exit 1
     stage tests      run_tests "$IMAGE"       || exit 1
@@ -221,7 +239,10 @@ else
     while [ "$n" -lt "$CORES" ]; do W="$W $n"; n=$((n * 2)); done
     W="${W# } $CORES"
     WS="1 4"; [ "$CORES" -gt 8 ] && WS="$WS 8"; [ "$CORES" -gt 4 ] && WS="$WS $CORES"
-    say "connections $CONNS  workers $W (scaling), $WS (others)"
+    RATES="${RATES:-50000 100000 150000 200000 300000 400000}"
+    [ "$CORES" -ge 16 ] && RATES="$RATES 600000"
+    say "connections $CONNS  workers $W (scaling), $WS (others)  open-loop rates $RATES"
+    stage wrk2       build_wrk2   # if this fails, only the open-loop stage is left out
     stage build      build_main               || exit 1
     stage tests      run_tests "$IMAGE"       || exit 1
     stage L-scaling   bench "$IMAGE" scaling --engines "uringpy asyncio-proto uvloop-proto" \
@@ -234,10 +255,21 @@ else
     stage L-handler   bench "$IMAGE" handler --engines "uringpy-app uringpy-app-batch" \
                           --modes "thread process" --workers "1 $CORES" --handler-work "0 10 30 100" \
                           --conns "$CONNS" --docker-opts "--ulimit nofile=65536:65536"
+    if [ -x "$WRK2" ]; then
+        OUTDIR="${OUT}-openloop" stage L-openloop bench "$IMAGE" openloop \
+            --workers "$CORES" --conns "$CONNS" --rates "$RATES" --duration 30 \
+            --exclude "uvloop-proto-app/thread/* uringpy-app/process/*" \
+            --wrk "$WRK2" --docker-opts "--ulimit nofile=65536:65536"
+    else
+        say "skip   L-openloop: wrk2 is not available"
+    fi
 fi
 
 cd "$REPO/benchmarks/results-revision" || exit 1
-packed="$PROFILE"; [ -n "$(ls -A "${PROFILE}-py313" 2>/dev/null)" ] && packed="$packed ${PROFILE}-py313"
+packed="$PROFILE"
+for extra in "${PROFILE}-py313" "${PROFILE}-openloop"; do
+    [ -n "$(ls -A "$extra" 2>/dev/null)" ] && packed="$packed $extra"
+done
 # shellcheck disable=SC2086
 tar -czf "$HOME/results-revision-${PROFILE}-${COMMIT}.tgz" $packed
 say "packed benchmarks/results-revision/{$packed} into ~/results-revision-${PROFILE}-${COMMIT}.tgz"

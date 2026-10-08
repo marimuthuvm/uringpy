@@ -198,3 +198,54 @@ def test_summarize_handler_columns_and_old_results():
     del old["handler_work"]
     meta = {"cells": [["uringpy", "thread", 1, 13, 0]], "params": {}}
     assert "| uringpy | thread | 1 |" in bm.summarize([old], meta)
+
+
+WRK2_OUTPUT = """Running 30s test @ http://10.0.0.2:8080/
+  16 threads and 800 connections
+  Thread calibration: mean lat.: 1.071ms, rate sampling interval: 10ms
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     1.07ms  459.03us   5.22ms   70.12%
+    Req/Sec     6.59k     0.98k    9.10k    66.21%
+  Latency Distribution (HdrHistogram - Recorded Latency)
+ 50.000%    1.03ms
+ 75.000%    1.40ms
+ 90.000%    1.80ms
+ 99.000%    2.47ms
+ 99.900%    3.14ms
+ 99.990%    4.07ms
+ 99.999%    5.22ms
+100.000%    5.22ms
+
+  Detailed Percentile spectrum:
+       Value   Percentile   TotalCount 1/(1-Percentile)
+
+       0.287     0.000000            1         1.00
+       1.030     0.500000       751020         2.00
+#[Mean    =        1.071, StdDeviation   =        0.459]
+  2999950 requests in 30.00s, 247.27MB read
+Requests/sec:  99998.21
+Transfer/sec:      8.24MB
+"""
+
+
+def test_parse_wrk2_open_loop_output():
+    r = bm.parse_wrk(WRK2_OUTPUT)
+    assert r["rps"] == 99998.21 and r["requests"] == 2999950
+    assert r["lat_p50_ms"] == 1.03 and r["lat_p99_ms"] == 2.47
+    assert r["lat_p999_ms"] == 3.14 and r["lat_avg_ms"] == 1.07
+    assert bm.parse_wrk(WRK_OUTPUT)["lat_p999_ms"] != bm.parse_wrk(WRK_OUTPUT)["lat_p999_ms"]  # nan
+
+
+def test_open_loop_cells_and_summary_by_rate():
+    cells = bm.build_cells(_args(experiment="openloop"))
+    assert set(cells) == {("uringpy-app", "thread", 4, 13, 0, 0, 400),
+                          ("uringpy-app-batch", "thread", 4, 13, 0, 0, 400),
+                          ("uringpy-app-batch", "process", 4, 13, 0, 0, 400),
+                          ("uvloop-proto-app", "process", 4, 13, 0, 0, 400)}
+    rows = ([_row("uringpy-app", 4, 50000.0, rate=50000) for _ in range(3)]
+            + [_row("uringpy-app", 4, 150000.0, rate=200000) for _ in range(3)])
+    text = bm.summarize(rows)
+    lines = [l for l in text.splitlines() if l.startswith("| uringpy-app")]
+    assert len(lines) == 2                       # one row per rate
+    assert "@50000/s" in lines[0] and "saturated" not in lines[0]
+    assert "@200000/s" in lines[1] and "saturated" in lines[1]

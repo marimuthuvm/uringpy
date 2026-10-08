@@ -184,7 +184,10 @@ here says anything about either package on the Python versions it supports.
 A review of the paper raised three objections that the data above cannot
 answer: GIL hand-offs were inferred and never observed; everything ran on a
 four-core server; and the `io_uring` event loops that motivate the work were
-not measured. `bash benchmarks/run_revision.sh` adds one measurement for each.
+not measured. `bash benchmarks/run_revision.sh` adds one measurement for each,
+and one more for a fourth gap: every result above is at saturation, where
+latency follows from throughput, so nothing says what batching costs in
+latency at the loads a server normally runs at.
 Its results go to `benchmarks/results-revision/`, apart from the folders
 above, and change none of the numbers above.
 
@@ -201,6 +204,7 @@ once, at exit, and costs nothing per request.
 | `h-factorial`, `h-app`, `h-gilbatch`, `h-handler` (`PROFILE=small`) | the four-core server of the main run | the thread-mode configurations of `factorial`, `app` and `gilbatch` (`gilbatch` at 1 and 4 workers), and `handler` for both reactors at 0 to 100 added iterations, threads at 1 and 4 workers; 400 connections, 5 repetitions, as in the main run |
 | `check313`, `loops313`, `app313` (`PROFILE=small`) | the same | an image built from `Dockerfile.bench` with CPython 3.13, plus `uringcore` and `uringloop` (`Dockerfile.loops`). `check_loop.py` first tests each loop: one connection with 20,000 requests one after another, then 400 connections with 3 requests each. The loops that pass are measured against `asyncio`, `uvloop` and `uringpy` (streams and Protocol API, threads and processes, 1, 2 and 4 workers), and with the handler (Protocol API, 1 and 4 workers) |
 | `L-scaling`, `L-factorial`, `L-app`, `L-handler` (`PROFILE=large`) | the same VMs resized to a server with more cores (8 or 16) and a client with twice as many | `scaling` (the runtime and the two Protocol API baselines), `factorial`, `app` and `handler` (0, 10, 30 and 100 added iterations) at 1, 4 and all cores, threads and processes, 100 connections per server core |
+| `L-openloop` (`PROFILE=large`) | the same | open loop: `wrk2` (built on the client; its commit is logged) sends requests at fixed total rates of 50, 100, 150, 200, 300 and 400 thousand per second (and 600 thousand with 16 cores) to the default handler on all cores: the reactor with the GIL taken per request (threads), with GIL batching (threads and processes), and `uvloop` (processes, Protocol API). Runs of 30 s; latency percentiles are corrected for coordinated omission by `wrk2`. Results in `benchmarks/results-revision/large-openloop/` |
 
 Expectations, written before any of these runs (`ĝ` is the counted upper
 limit used so far, `gsw` the observed hand-offs per request):
@@ -250,6 +254,31 @@ limit used so far, `gsw` the observed hand-offs per request):
       its own processes.
    d. `uringpy` on 3.13 shows the pattern it shows on 3.14: its threads come
       within 10% of its processes at four workers.
+4. **Open loop** (added on 2026-10-08 while the `PROFILE=small` run was in
+   progress, before any open-loop run).
+   a. At 50 and 100 thousand requests per second, where batches are small,
+      the median and 99th-percentile latency of batched threads are within 25%
+      of those of the threads that take the GIL per request: batching costs
+      little latency at light load.
+   b. As the rate rises, the per-request threads fall behind first: there is a
+      rate that they no longer sustain (achieved below 95% of offered) and
+      batched threads still do, and below that rate their tail latency rises
+      faster than that of batched threads.
+   c. Batched threads stop sustaining the offered rate near the lock capacity
+      measured in the closed-loop runs on the same machine; the processes of the
+      same reactor sustain the highest rates of the four configurations.
+
+Outcome of the `PROFILE=small` run at commit `4780b0e` (2026-10-08, all
+625 runs succeeded). The check on Python 3.13.7 (`small-py313/loopcheck-*.txt`):
+`asyncio` and `uvloop` passed. `uringcore` 0.9.1, on a version it states it
+supports, failed as on 3.14: one connection was answered 996 times (992 with
+the Protocol API) before the loop reported `No buffers available for recv`,
+and 400 connections received 575 of 1200 replies. Expectation 3a applies, and
+`uringcore` was not measured. `uringloop` was not tested: the server's loader
+looked for its loop class under names that version 0.1.0 does not use
+(`IouringProactorEventLoop` is the one it exports), so the server did not
+start. That was our error, not the package's. The loader was corrected and the
+check repeated at the next commit (stages `build313` and `check313`).
 
 The 2x2 design of `factorial`:
 
