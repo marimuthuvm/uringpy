@@ -1,0 +1,92 @@
+Checks of the io_uring-based asyncio loops on the benchmark machines
+====================================================================
+
+Date: 2026-10-07 (UTC). Server image: uringpy:5db4eab-loops (the image of the
+main run, which has uvloop 0.23.0, plus uringcore 0.9.1 and uringloop 0.1.0;
+CPython 3.14.7, GIL build). Server: benchmarks/sharded_server.py with --engine uringcore.
+
+This is a record of what the checks printed, copied from the terminal. It is
+not a results folder of the driver and no table or figure reads it. Lines
+marked [...] were not kept. The 30 measured runs of uringcore that failed are
+in loops-uringpy-5db4eab-loops-20261007T191746Z/ next to this file.
+
+1. Starting the loops (run_loops_experiment.sh, first attempt, default limits)
+
+   == 17:40:03Z uvloop: available
+   == 17:40:04Z uringcore: NOT available: RuntimeError: `io_uring` operation failed: register_buffers failed: Cannot allocate memory (os error 12)
+   == 17:40:05Z uringloop: NOT available: AttributeError: module 'asyncio.unix_events' has no attribute 'AbstractChildWatcher'
+
+   Container limits as logged by run_supplement.sh:
+   == 18:55:13Z container limits, default: open files 1024, locked memory 8192 kB
+   == 18:55:13Z container limits, raised:  open files 65536, locked memory unlimited kB
+
+2. Supplementary run, limits raised (--ulimit nofile=65536:65536 --ulimit memlock=-1:-1)
+
+   == 19:17:45Z uringcore: available
+   == 19:17:45Z uringloop: NOT available [...]
+   == 19:17:45Z start  loops
+   == 19:47:57Z done   loops
+   [...] loops-uringpy-5db4eab-loops-20261007T191746Z: 60 of 90 runs ok
+
+   The 60 are the runs of asyncio and uvloop; all 30 runs of uringcore failed
+   with wrk unable to connect.
+
+3. One uringcore worker, three single requests, limits raised
+
+   request 1: 200
+   request 2: 200
+   request 3: 200
+   [runtime] python=3.14.7 gil_enabled=1
+   [uringcore/process] starting 1 worker(s)
+   [...]
+   serving on 0.0.0.0:8080 (1 process workers)
+   exit code 0 running true
+
+4. The same server, 400 connections opened, three requests on each
+
+   400 connections opened; {'sent': 1200, 'reply': 511, 'closed by server': 689}
+   [...] uringcore/transport.py, line 108, in write
+   [...] RuntimeError: No buffers available
+   [...] loop.py line 237 in _handle_recv_completion
+       self._core.submit_recv(fd)
+   RuntimeError: No buffers available for recv
+   exit code 0 running false
+
+5. What the package offers for the buffer pool
+
+   UringEventLoop () doc: Pure io_uring event loop with no selector fallback [...]
+   UringCore (ring_size=None, buffer_size=None, buffer_count=None, try_sqpoll=None)
+   loop.py: self._core = UringCore()
+
+   sharded_server.py was then changed (commit c79b299) to pass
+   URINGCORE_BUFFER_COUNT to the buffer_count parameter.
+
+6. run_loops_experiment.sh at commit c79b299, pool of 4096 buffers
+
+   == 22:13:41Z commit c79b299 [...] options: --ulimit nofile=65536:65536 --ulimit memlock=-1:-1 -e URINGCORE_BUFFER_COUNT=4096
+   == 22:13:49Z uringcore: starts. [uringcore] buffer_count=4096 buffer statistics: (4096, 4096, 0, 0)
+   == 22:13:50Z uringloop: NOT available [...]
+   == 22:14:08Z uringcore: only 1 of 4 trial runs succeeded: [2/4] rep 1 uringcore/thread w=1 [...] wrk-failed [...] Connection refused
+   == 22:14:08Z no io_uring loop serves the load: nothing to measure
+
+   The script stopped there, as written, and measured nothing.
+
+7. Requests sent one after another on a single connection until the server stops answering
+
+   buffer_count setting: default
+   error: timed out
+   answered 997 requests on one connection
+   buffer_count setting: 4096
+   answered 4069 requests on one connection
+   [uringcore] buffer_count=4096 buffer statistics: (4096, 4096, 0, 0)
+   RuntimeError: No buffers available for recv
+
+In check 7, "default" is the package's own pool, with URINGCORE_BUFFER_COUNT not
+set.
+
+Reading. With either pool the server answered a number of requests close to the
+size of the pool and then reported that no buffer was available, on one
+connection as well as on 400. We did not look for the cause in the package.
+uringcore 0.9.1 states that it is tested on Python 3.10 to 3.13; these checks
+ran it on 3.14. Nothing here says anything about the package on the versions
+it supports.

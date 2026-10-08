@@ -10,7 +10,7 @@ per-run data for each table is kept under `benchmarks/results/`.
 > Under the GIL, whether worker threads of one interpreter scale is decided by
 > how much of a request runs with the GIL held and by how often the GIL changes
 > hands per request. The system-call interface and the language of the loop
-> matter to scaling only through those two.
+> matter to scaling mainly through those two.
 
 This is not the claim the work started from. The order of events:
 
@@ -40,7 +40,8 @@ This is not the claim the work started from. The order of events:
    below, in the commit at which all current results were measured.
 5. **Outcome.** All experiments were run together at that commit (`5db4eab`).
    The prediction for `py-epoll-batch` held: with the interface and the system
-   calls of `py-epoll` and one GIL release per pass it scales like `py-uring`.
+   calls of `py-epoll` and its GIL releases made per pass instead of per system
+   call it scales like `py-uring`.
    GIL batching restores thread scaling for the `epoll` reactor as it does for
    the `io_uring` reactor, and in `gilbatch` scaling rises step by step as fewer
    acquisitions are made per request. One thing was not expected. The two
@@ -49,9 +50,21 @@ This is not the claim the work started from. The order of events:
    differ with them. A count of releases or acquisitions is therefore an upper
    limit on hand-offs, and context switches per request are reported next to
    it.
+6. **How far the claim goes.** Hand-offs of the GIL were not observed: the lock
+   was not traced. They are inferred from counters (releases, acquisitions,
+   voluntary context switches) and from interventions that change how often the
+   GIL is given up. The data support the claim as an ordering of
+   configurations, not as a formula that predicts scaling: the hand-off cost
+   derived from it differs from one handler size to the next. Everything was
+   measured on a four-core server under saturating closed-loop load, where
+   on the transport path even processes scale by only 2.3 to 2.7. A supplementary run on the same
+   images added 1600 connections and three handler sizes; its expectations
+   were written down before it ran and were weak ones. The `asyncio` loops
+   built on `io_uring` that motivated the work could not be measured on
+   Python 3.14.
 
 The numbers are in the generated tables (`benchmarks/results/tables/`) and in
-the paper; none is repeated here by hand.
+the paper. The few repeated in this file were copied from `numbers.tex`.
 
 ## Setup
 
@@ -99,7 +112,7 @@ such run therefore carry one commit in their name and in `meta.json`.
 | `handler` | How does thread scaling depend on how long each request holds the GIL, and where do worker threads stop paying against one process per worker? | uringpy-app, uringpy-app-batch (threads and processes); asyncio-proto-app, uvloop-proto-app (processes, 1 and 4 workers) | thread, process | 1, 2, 4 | handler work 0 … 3000 iterations |
 | `load` | Do the results hold at other loads than 400 connections? | uringpy, py-uring, py-epoll, uringpy-app, uringpy-app-batch | thread | 1, 4 | 16, 64, 400, 1600 connections (the 1600-connection runs that count are those of the supplementary run, see below) |
 | `size` | Where does the advantage end as responses grow? | uringpy, asyncio-proto | process | 4 | body 64 B … 1 MiB |
-| `loops` | How do the `asyncio` event loops built on `io_uring` behave as threads and as processes? Run by `run_supplement.sh` on an image that adds the two packages to the image of the main run (built by `run_loops_experiment.sh`). | asyncio, uvloop, uringcore, uringloop | thread, process | 1, 2, 4 | — |
+| `loops` | How do the `asyncio` event loops built on `io_uring` behave as threads and as processes? Run by `run_supplement.sh` on an image that adds the two packages to the image of the main run (built by `run_loops_experiment.sh`). Neither loop could be measured on Python 3.14; see "Outcome" below. | asyncio, uvloop, uringcore, uringloop | thread, process | 1, 2, 4 | — |
 | `baselines` | How do other event loops and the faster asyncio API compare? (now part of `scaling`) | asyncio, asyncio-proto, uvloop, uvloop-proto | thread, process | 1, 4 | — |
 
 ### Supplementary run (`run_supplement.sh`)
@@ -112,12 +125,14 @@ its buffers. A first attempt at the `loops` experiment on 2026-10-07 (image
 `uringcore` failed with `register_buffers failed: Cannot allocate memory`, and
 `uringloop` with `module 'asyncio.unix_events' has no attribute
 'AbstractChildWatcher'`, an `asyncio` API that Python 3.14 has removed. That
-attempt measured `asyncio` and `uvloop` only and is not used.
+attempt measured `asyncio` and `uvloop` only (60 runs) and is not used.
 
 `bash benchmarks/run_supplement.sh` repeats what the limits spoiled and adds
-one sweep. It rebuilds nothing: the server runs the images of the main run,
-and the only difference is `--ulimit nofile=65536:65536 --ulimit memlock=-1:-1`
-on `docker run`, passed through the driver's `--docker-opts` and recorded in
+one sweep. It rebuilds nothing: for `load` and `handler` the server runs the
+image of the main run, and for `loops` the image that the first attempt had
+built on top of it (`uringpy:5db4eab-loops`, which adds `uringcore` and
+`uringloop`). The only difference from the main run is
+`--ulimit nofile=65536:65536 --ulimit memlock=-1:-1` on `docker run`, passed through the driver's `--docker-opts` and recorded in
 every `meta.json`. The script logs the container's default limits, so the
 limits of the main run are on record too.
 
@@ -139,13 +154,102 @@ once a few hundred connections are open, the error ends its event loop, and
 the server process exits. Those runs are kept under
 `benchmarks/results/superseded/`.
 
-`bash benchmarks/run_loops_experiment.sh` is the third attempt. It gives
+`bash benchmarks/run_loops_experiment.sh` was the third attempt. It gives
 `uringcore` a larger buffer pool through the `buffer_count` parameter of its
 engine (`URINGCORE_BUFFER_COUNT`, 4096 by default; see `_new_loop` in
 `sharded_server.py`), keeps both raised limits, and before measuring checks
-that the loop serves 400 connections in four short trial runs. The expectation
-for `uringcore` in the table above was written before any of its runs
-succeeded and applies unchanged.
+that the loop serves 400 connections in four short trial runs. Only one of the
+four trial runs succeeded, so the script stopped, as written, and measured
+nothing.
+
+A last check sent requests one after another on a single connection. The
+server answered 997 of them with its default pool and 4069 with a pool of 4096
+buffers, and then reported `No buffers available`: with either pool it serves
+a number of requests close to the size of the pool. That explains the
+30 failed runs and the failed trial (the first attempt had failed earlier, at
+start-up, on the limit on locked memory), and a still larger pool would only
+move the point at which it stops.
+We did not look for the cause inside the package. `uringcore` 0.9.1 states
+that it is tested on Python 3.10 to 3.13, and these runs used 3.14.7.
+`uringloop` 0.1.0 does not start on 3.14 at all.
+
+So neither `io_uring`-based `asyncio` loop is part of the results, the second
+expectation in the table above was never tested, and the paper says so. What
+the checks printed is recorded in
+`benchmarks/results/superseded/uringcore-checks-5db4eab-20261007.txt`. Nothing
+here says anything about either package on the Python versions it supports.
+
+### Revision experiments (`run_revision.sh`)
+
+A review of the paper raised three objections that the data above cannot
+answer: GIL hand-offs were inferred and never observed; everything ran on a
+four-core server; and the `io_uring` event loops that motivate the work were
+not measured. `bash benchmarks/run_revision.sh` adds one measurement for each.
+Its results go to `benchmarks/results-revision/`, apart from the folders
+above, and change none of the numbers above.
+
+**Observed hand-offs.** CPython counts, inside the GIL, every acquisition by a
+thread other than the lock's previous holder (`switch_number`, incremented in
+`take_gil()`). `uringpy._gilstat.switch_count()` reads that counter, and every
+server process reports it at exit (`gil_switches=` on its `[proc]` line,
+`srv_gil_switches` in `runs.csv`). It is a count of hand-offs made by the
+interpreter itself, not an upper limit inferred from releases. It is read
+once, at exit, and costs nothing per request.
+
+| Stage | Machine | What is run |
+| --- | --- | --- |
+| `h-factorial`, `h-app`, `h-gilbatch`, `h-handler` (`PROFILE=small`) | the four-core server of the main run | the thread-mode configurations of `factorial`, `app` and `gilbatch` (`gilbatch` at 1 and 4 workers), and `handler` for both reactors at 0 to 100 added iterations, threads at 1 and 4 workers; 400 connections, 5 repetitions, as in the main run |
+| `check313`, `loops313`, `app313` (`PROFILE=small`) | the same | an image built from `Dockerfile.bench` with CPython 3.13, plus `uringcore` and `uringloop` (`Dockerfile.loops`). `check_loop.py` first tests each loop: one connection with 20,000 requests one after another, then 400 connections with 3 requests each. The loops that pass are measured against `asyncio`, `uvloop` and `uringpy` (streams and Protocol API, threads and processes, 1, 2 and 4 workers), and with the handler (Protocol API, 1 and 4 workers) |
+| `L-scaling`, `L-factorial`, `L-app`, `L-handler` (`PROFILE=large`) | the same VMs resized to a server with more cores (8 or 16) and a client with twice as many | `scaling` (the runtime and the two Protocol API baselines), `factorial`, `app` and `handler` (0, 10, 30 and 100 added iterations) at 1, 4 and all cores, threads and processes, 100 connections per server core |
+
+Expectations, written before any of these runs (`ĝ` is the counted upper
+limit used so far, `gsw` the observed hand-offs per request):
+
+1. **Observed hand-offs, four cores.**
+   a. At four threads, the configurations that give up the GIL at every system
+      call or every request (`py-epoll`, `c-epoll-app`, `uringpy-app`,
+      `asyncio`, `uvloop` and their Protocol and handler variants) show at
+      least 0.3 observed hand-offs per request; those that give it up once per
+      pass or batch (`py-uring`, `py-epoll-batch`, `uringpy-app-batch`,
+      `c-epoll-app-batch`) fewer than 0.1; the C loops without Python
+      (`uringpy`, `c-epoll`) fewer than 0.01.
+   b. The order holds without overlap: every four-thread configuration with
+      `S_4 >= 2` has fewer observed hand-offs per request than every one with
+      `S_4 < 1`.
+   c. The two reactors that take the GIL once per request (`ĝ = 1` for both)
+      differ in observed hand-offs: `c-epoll-app` shows more per request than
+      `uringpy-app`. If they show the same, the paper's explanation of why the
+      two scale so differently (0.70 against 1.61) is wrong.
+   d. In the cap sweep (`gilbatch`), observed hand-offs per request fall as
+      the cap rises, as the counted acquisitions do.
+   e. Every configuration repeated from the main run delivers within 5% of its
+      main-run throughput: the new image changes nothing else.
+2. **More cores** (`W` = the server's cores).
+   a. Processes scale beyond four workers: `S_W` of `uringpy` processes is
+      larger than `S_4`.
+   b. With no Python per request, `uringpy` threads stay within 10% of
+      `uringpy` processes at `W` workers.
+   c. With the default handler and GIL batching, threads at `W` workers deliver
+      no more than the lock capacity `1 / t_p,W` measured in the same runs, and
+      a smaller fraction of what the same reactor's processes deliver than
+      at four workers in the main run (0.93). From the main run the lock
+      saturates near 420 thousand requests per second on this handler.
+   d. The designs that give up the GIL per request or per system call
+      (`c-epoll-app`, `uringpy-app`, `py-epoll`) scale no better as threads at
+      `W` workers than at four.
+   e. Expectation 1b holds at `W` workers as well.
+3. **`uringcore` and `uringloop` on Python 3.13.**
+   a. If a loop fails `check_loop.py`, it is reported as unusable for this
+      load on a version it supports, with the check's output, and not measured.
+   b. A loop that passes runs a Python callback for every event, as `asyncio`
+      and `uvloop` do. At four threads it shows at least 0.3 observed
+      hand-offs per request and scales below 1.5, while its processes scale
+      within 15% of the other loops' processes.
+   c. Any advantage it has on one worker does not survive across threads: at
+      four threads it is slower than four `uringpy` threads and than four of
+      its own processes.
+   d. `uringpy` on 3.13 shows the pattern it shows on 3.14: its threads come
+      within 10% of its processes at four workers.
 
 The 2x2 design of `factorial`:
 
@@ -214,17 +318,23 @@ Columns of `runs.csv` that the formulas use:
 | `srv_python`, `srv_gil` | server | interpreter version and GIL state at start-up |
 
 Server counters cover the server's whole life, warm-up included. Ratios of two
-server counters are therefore consistent; they are never divided by wrk's
-request count.
+server counters are therefore consistent, and they are not divided by wrk's
+request count. The one exception is context switches per request for `asyncio`
+and `uvloop`, which do not count requests (see Formulas).
 
 ## Published results and tables
 
 The runs behind the reported numbers are in `benchmarks/results/`, one folder
-per experiment and interpreter. All of them were made on 2026-10-07 by
-`run_paper_experiments.sh` at commit `5db4eab`: `...-5db4eab-...` is the GIL
-build and `...-5db4eabt-...` the free-threaded build. `benchmarks/make_tables.py`
-reads every such folder and writes the tables, the figures, the numbers quoted
-in the paper and the results block of the README:
+per experiment, interpreter and run. All of them were made on 2026-10-07 (UTC)
+on the images built from commit `5db4eab`: `...-5db4eab-...` is the GIL build
+and `...-5db4eabt-...` the free-threaded build. Fourteen folders hold 2190
+runs. Twelve of them come from `run_paper_experiments.sh` (driver at commit
+`5db4eab`) and two, `load-...T185514Z` and `handler-...T194758Z`, from
+`run_supplement.sh` (driver at commit `abf3e7c`, same images, raised container
+limits). Each folder's `meta.json` records the driver's commit, the image id
+and the options passed to `docker run`. `benchmarks/make_tables.py` reads
+every such folder and writes the tables, the figures, the numbers quoted in
+the paper and the results block of the README:
 
 ```bash
 python3 benchmarks/make_tables.py                     # -> benchmarks/results/tables/
@@ -238,40 +348,59 @@ It uses the statistics functions of `bench_matrix.py`, so a table and a
 `summary.md` cannot disagree, and each generated file starts with the folders,
 commit and image it was computed from. Folders of the same experiment are
 pooled, so a trial or an aborted run must not be left in `benchmarks/results/`.
+Sums of measurements are exactly rounded (`math.fsum`), so the generated files
+are the same byte for byte whichever Python version runs the script.
 
 | Output | Experiment(s) | Shows |
 | --- | --- | --- |
 | `tab_probe` | `probe-*.txt` (output of `gil_experiment.py`) | the contention probe, mean and fastest repetition |
-| `tab_factorial`, `tab_effects` | `factorial` (both builds) | the 2x2 design and its two controls: throughput, scaling as threads, as processes and without the GIL, system calls, GIL releases and context switches per request; each factor's effect with the other held fixed |
+| `tab_factorial`, `tab_effects` | `factorial` (both builds) | the 2x2 design and its two controls: throughput, scaling as threads, as processes and as threads without the GIL, system calls, GIL releases and context switches per request; each factor's effect with the other held fixed, and the effect of each control |
 | `tab_batch` | `batch` | throughput against the cap on completions per system call |
 | `tab_scaling`, `fig_scaling` | `scaling` (both builds) | throughput at 1 to 4 workers, scaling, busy cores |
-| `tab_app` | `app` (both builds) | the same with a Python handler per request, GIL taken per request and per batch, on both reactors |
-| `tab_gilbatch` | `gilbatch` | scaling against the number of requests served per GIL acquisition |
-| `tab_handler`, `fig_handler` | `handler` (both builds) | handler cost swept: GIL hold and wait time, the bound, measured scaling, GIL utilisation; threads against processes |
-| `tab_load` | `load` | scaling at 16, 64 and 400 connections |
+| `tab_app` | `app` (both builds) | the same with a Python handler per request, GIL taken per request and per batch, on both reactors; GIL acquisitions and context switches per request |
+| `tab_gilbatch` | `gilbatch` | scaling against the number of requests served per GIL acquisition, with hold time, wait time, GIL utilisation and context switches per request |
+| `tab_handler`, `fig_handler` | `handler` (both builds, main and supplementary run) | handler cost swept over nine sizes: GIL hold and wait time, the bound, measured scaling, GIL utilisation; threads against processes and against the baselines' processes |
+| `tab_load` | `load` (main and supplementary run) | scaling, GIL releases or acquisitions and context switches per request at 16, 64, 400 and 1600 connections |
 | `tab_size` | `size` | throughput and data rate against response size |
-| `fig_handoffs` | `factorial`, `scaling`, `app`, `gilbatch` | thread scaling against voluntary context switches per request, every thread-mode configuration of the GIL build |
-| `numbers.tex` | all | every measured number the paper quotes in its text, as `\V{key}` macros |
+| `fig_handoffs` | `factorial`, `scaling`, `app`, `gilbatch` | thread scaling against voluntary context switches per request, every thread-mode configuration of the GIL build at four workers, with the cap sweep of `gilbatch` as connected points |
+| `numbers.tex` | all | every measured number the paper quotes in its text, as `\V{key}` macros: one entry per quantity and configuration, ratios between configurations with their intervals, and counts about the data set itself (`meta:...`: runs made, excluded and failed, runs with socket errors, commits, dates) |
+
+`tab_loops` is written only when an `io_uring`-based loop has data, which it
+does not. A `tab_loops.tex` or `tab_ladder.tex` in a tables folder is left over
+from an earlier version of the script and is not used.
 
 What a reader should know about these runs:
 
-- **One exclusion.** The `load` experiment was also run with 1600 connections.
-  Those 50 runs are in `runs.csv` and are left out of every table, figure and
-  number by the rule `EXCLUSIONS` in `make_tables.py`, which also counts them.
-  The reason: a process in the benchmark container may hold 1024 open files,
-  fewer than the connections offered. The `py-epoll` server stopped on the
-  first `accept` that failed, in all 10 of its runs. The other servers kept
-  running and served only the connections they had accepted, about a thousand,
-  so none of these runs measured 1600 connections.
-- **Socket errors.** Runs of `handler` with 1000 or 3000 added iterations
-  reported socket errors from `wrk` (at most 0.4% of a run's requests), for the
-  reactors of this repository and for `uvloop-proto-app` alike, mostly where one
-  worker serves all 400 connections. The driver records the total that `wrk`
-  prints, not the kind of error.
+- **One exclusion, repeated.** The main run also measured `load` with 1600
+  connections. Those 50 runs are in `runs.csv` and are left out of every table,
+  figure and number by the rule `EXCLUSIONS` in `make_tables.py`, which also
+  counts them. The reason: a process in the benchmark container could hold 1024
+  open files, fewer than the connections offered. The `py-epoll` server stopped
+  on the first `accept` that failed, in all 10 of its runs. The other servers
+  kept running and served only the connections they had accepted, between 947
+  and 1016, so none of these runs measured 1600 connections. The supplementary
+  run repeated the 50 runs with the limit raised, and those are the
+  1600-connection rows of `tab_load`.
+- **One failed attempt.** The `loops` folder of the supplementary run (90 runs:
+  60 of `asyncio` and `uvloop`, which succeeded, and 30 of `uringcore`, which
+  all failed) is under `benchmarks/results/superseded/`, because the loop it
+  was run for could not be measured. It is not part of the 2190 runs. Its
+  `asyncio` and `uvloop` runs repeat twelve configurations of `scaling` some
+  twelve hours later, and `make_tables.py` reads them for one purpose only: the
+  ratio of the two sessions' throughputs (0.97 to 1.01, `meta:anchor-*`).
+- **Socket errors.** `wrk` reported socket errors in 133 of the 2140 runs
+  that are used. 107 of them are `handler` runs with 1000 or 3000 added
+  iterations (at most 0.37% of a run's requests), for the reactors of this
+  repository and for `uvloop-proto-app` alike, mostly where one worker serves
+  all 400 connections. 20 are the one-worker runs of the four `io_uring`
+  engines with 1600 connections (at most 0.008%), where a single worker accepts
+  1600 connections from a listen queue of 1024. Six are scattered. The tables
+  mark the affected cells. The driver records the total that `wrk` prints, not
+  the kind of error.
 - **Comparisons across experiments.** Comparisons inside one experiment are
   interleaved. Comparisons across two experiments are not: one `uringpy` worker
-  was measured in `scaling`, `factorial` and `batch`, and the three means differ
-  by about 1%. Comparisons between the GIL build and the free-threaded build
+  was measured in `scaling`, `factorial`, `batch` and `load`, and the four means
+  lie between 143.0 and 145.6 thousand requests per second. Comparisons between the GIL build and the free-threaded build
   are also across experiments.
 - **Text files.** `probe-*.txt` is the output of `gil_experiment.py` and
   `handler-thread-control-*.txt` that of `handler_thread_control.py` (the
@@ -282,7 +411,8 @@ What a reader should know about these runs:
   revised (`d9bc686` is in the history as `3510a35`: its message was reworded
   afterwards, its content is the same). They include the `factorial` runs in which `py-uring` held the GIL
   while submitting, which led to the wrong conclusion described at the top of
-  this file. `make_tables.py` does not read that folder.
+  this file. `make_tables.py` reads nothing from that folder except the `loops`
+  folder described above.
 
 ## Formulas
 
@@ -355,7 +485,16 @@ request, so
 Every release of the GIL is an opportunity for a hand-off, not a hand-off: it
 becomes one only if another thread is waiting and gets to run before the
 releasing thread asks for the lock again. What is counted is therefore an upper
-limit on `g`, and it is what the column `g` of the tables contains:
+limit on `g`. The paper and the tables write the counted quantity `g^` (g with
+a hat) to keep it apart from `g`. The runs of the revision also observe `g`:
+
+- **Observed GIL hand-offs per request** (`gsw:...`; revision runs only):
+  `srv_gil_switches / srv_requests`, where `srv_gil_switches` is CPython's own
+  count of acquisitions of the GIL by a thread other than its previous holder,
+  summed over the server's processes. For `asyncio` and `uvloop` the divisor
+  is estimated as for context switches below.
+
+The counted upper limits:
 
 - **GIL acquisitions per request** (C reactors with a handler):
   `srv_gil_acquires / srv_handler_calls`; 1 when the GIL is taken per request,
@@ -376,6 +515,23 @@ limit on `g`, and it is what the column `g` of the tables contains:
   request: `tau = 1 / m_N - t_p,N`. It is derived, not timed, and no single
   value fits all handler sizes (`meta:tau-min`, `meta:tau-max` in
   `numbers.tex`).
+- **Lock capacity**: `1 / t_p,N`, the requests per second that a lock held
+  for `t_p,N` per request could pass if it were never idle (`lockcap:...`).
+  Threads cannot exceed it; with long handlers they approach it.
+- **Wait per acquisition**: `w_N / g^`, the wait for the GIL divided by the
+  acquisitions per request (`wacq:...`). With GIL batching a batch waits long
+  but only once.
+- **Threads against processes**: throughput of four threads over that of four
+  processes of the same engine (`r:thread-over-process:...`). The paper and
+  `fig_handler` compare the batched reactor's threads with the batched
+  reactor's own processes throughout.
+- **Gap to the bound**: `min(N, 1/f) / S_N - 1` for the batched reactor, in
+  percent (`boundgap:...`): how far the bound lies above what was measured.
+- **Estimate of `f` for the loops written in Python**, whose hold time is not
+  instrumented: the extra time per request over the C loop on the same
+  interface on one worker, `1/m_1(Python loop) - 1/m_1(C loop)`, as a share of
+  the Python loop's time per request (`tpy:...`, `fpy:...`). It is a
+  difference of two measured numbers and carries the uncertainty of both.
 
 With GIL batching and long handlers, the interpreter's switch interval
 interrupts a batch, so the recorded hold then includes time waiting to resume;
@@ -395,11 +551,11 @@ here, and where a reader can check.
 | A weak baseline | `asyncio` through both its streams and its faster Protocol API; `uvloop`; the same interpreter version for every engine | `scaling`, `baselines` |
 | GIL vs. free-threaded confounded by different builds | Both interpreters come from one recipe that differs only in `--disable-gil`; the GIL state the server reports is recorded per run | `Dockerfile.bench`, `GIL` column |
 | Crediting `io_uring` for what C code does, or the reverse | The 2x2 design varies the two factors separately; the batch cap varies batching alone | `factorial`, `batch` |
-| Crediting the interface or the loop's language for what the handling of the GIL does | Two controls that each change one thing (`py-epoll-batch`: GIL releases, with interface and system calls fixed; `py-uring-held`: time under the GIL, with releases fixed); the same GIL batching on an `epoll` reactor; all of it repeated without the GIL | `factorial`, `app` |
+| Crediting the interface or the loop's language for what the handling of the GIL does | Two controls, each aimed at one of the confounded quantities (`py-epoll-batch`: GIL releases per pass, with the interface and the system calls unchanged, though the order of work within a pass changes with it; `py-uring-held`: time under the GIL, with no more releases than before); the same GIL batching on an `epoll` reactor; all of it repeated without the GIL. Neither control is a clean single-factor change, and the paper says so | `factorial`, `app` |
 | A correlation across different engines read as a cause | One engine with the number of requests per GIL acquisition varied in steps and nothing else changed | `gilbatch` |
 | Results that hold at one load only | Connections varied | `load` |
-| Runs dropped without saying so | The one exclusion is a rule in `make_tables.py`, counted and explained | `EXCLUSIONS`, "Published results and tables" |
-| Code changing between experiments | All experiments run at one commit by one script, after the test suite passed in both images | `run_paper_experiments.sh`, `meta.json` |
+| Runs dropped without saying so | Two sets of runs are outside the data set: the 1600-connection runs of the main run (a rule in `make_tables.py`, counted, explained and repeated) and the failed attempt to measure `uringcore` (kept under `superseded/` with a record of the checks) | `EXCLUSIONS`, "Published results and tables" |
+| Code changing between experiments | Every run uses the server images built from one commit, after the test suite passed in both; the supplementary run uses the same images and a driver that differs by one option, the two raised container limits, which each `meta.json` records | `run_paper_experiments.sh`, `meta.json` |
 | Numbers mistyped | Tables, figures, the numbers in the paper's text and the README's results block are generated from the raw runs | `make_tables.py` |
 | System-call counts estimated, not measured | Both C reactors count their system calls and completed requests exactly | `syscalls/req`, `compl/enter` |
 | The 1-worker baseline quietly uses other cores for kernel network work | Server CPU is recorded; throughput per busy core is reported next to the scaling ratio | Formulas, `server_cpu_pct` |
@@ -441,9 +597,20 @@ What is not handled is listed under Limits and stated in the paper.
   that hold the GIL for about a microsecond, and only under enough load for
   batches to form (`tab_handler`, `fig_handler`, `tab_load`). With 16
   connections the client did not saturate the server.
-- With 300 or more added iterations the handler does not scale across threads
-  on the free-threaded build either. `handler_thread_control.py` reproduces
-  that with plain Python threads and no runtime, so it belongs to the
-  interpreter and this handler; its cause was not identified.
+- With 100 or more added iterations thread scaling falls on the free-threaded
+  build as well. `handler_thread_control.py` reproduces that with plain Python
+  threads and no runtime, so it does not come from the runtime. Whether its
+  cause lies in the interpreter or in the handler was not determined.
+- The time a request holds the GIL grows from one worker to four, with one
+  process per worker at least as much as with threads. It is a wall-clock
+  time, and at four workers no core is idle, so it includes whatever interrupts
+  or slows a handler. The handler sizes at which threads fall behind processes
+  are therefore partly a property of this four-core machine.
+- With GIL batching and the default handler the lock is busy for about two
+  thirds of the time at four workers (`U:...`, `lockcap:...`), so the threads
+  are not far from what one lock can pass. More cores were not measured.
+- `uvloop` with the streams API shows a 99th-percentile latency above 100 ms
+  on one worker, against about 6 ms for `asyncio`; the cause was not found. The
+  comparisons with `uvloop` that the paper relies on use the Protocol API.
 - The contention probe is reliable only for one competing thread on a 4-core
   machine: with two or three, the timings of both loops scatter widely.

@@ -14,15 +14,16 @@
 %   scaling-uringpy-5db4eab-20261007T071026Z: 200/200 runs ok, commit 5db4eab, image sha256:afe3a37b1f7d
 %   scaling-uringpy-5db4eabt-20261007T121646Z: 120/120 runs ok, commit 5db4eab, image sha256:1ebee854d3c1
 %   size-uringpy-5db4eab-20261007T160752Z: 60/60 runs ok, commit 5db4eab, image sha256:afe3a37b1f7d
+%   superseded/loops-uringpy-5db4eab-loops-20261007T191746Z: read for meta:anchor-* only
 \begin{table*}[t]
-\caption{Handler work swept (iterations of an interpreted loop added to every request), GIL build unless stated, with the GIL taken once per request (\code{uringpy-app}) or once per batch of requests (\code{uringpy-app-batch}). One-worker throughput $\bar{x}_1$ in thousands of requests per second (mean $\pm$ 95\% half-width, $n=5$); GIL hold time per request $t_p$ at one worker; $f = t_p\,\bar{x}_1$; the bound $\min(4, 1/f)$ of~\eqref{eq:bound}; measured scaling of worker threads ($S_2$, $S_4$), of worker processes ($S_4^{\mathrm{proc}}$) and of threads on the free-threaded build ($S_4^{\mathrm{ft}}$); and, at four worker threads, GIL hold time $t_{p,4}$ and wait time $w_4$ per request, GIL acquisitions per request $g$, and GIL utilisation $U_4 = \bar{x}_4\,t_{p,4}$.}
+\caption{Handler work swept (iterations of an interpreted loop added to every request), GIL build unless stated, with the GIL taken once per request (\code{uringpy-app}) or once per batch of requests (\code{uringpy-app-batch}). One-worker throughput $\bar{x}_1$ in thousands of requests per second (mean $\pm$ 95\% half-width, $n=5$); GIL hold time per request $t_p$ at one worker; $f = t_p\,\bar{x}_1$; the bound $\min(4, 1/f)$ of~\eqref{eq:bound}; measured scaling of worker threads ($S_2$, $S_4$), of worker processes ($S_4^{\mathrm{proc}}$) and of threads on the free-threaded build ($S_4^{\mathrm{ft}}$); and, at four worker threads, GIL hold time $t_{p,4}$ and wait time $w_4$ per request, GIL acquisitions per request $\hat{g}$, and GIL utilisation $U_4 = \bar{x}_4\,t_{p,4}$.}
 \label{tab:handler}
 \centering
 \footnotesize
 \setlength{\tabcolsep}{2pt}
 \begin{tabular}{@{}lrrrrrrrrrrrrr@{}}
 \toprule
-GIL per & Work & $\bar{x}_1$ & $t_p$ ($\mu$s) & $f$ & bound & $S_2$ & $S_4$ & $S_4^{\mathrm{proc}}$ & $S_4^{\mathrm{ft}}$ & $t_{p,4}$ & $w_4$ & $g$ & $U_4$ \\
+GIL per & Work & $\bar{x}_1$ & $t_p$ ($\mu$s) & $f$ & bound & $S_2$ & $S_4$ & $S_4^{\mathrm{proc}}$ & $S_4^{\mathrm{ft}}$ & $t_{p,4}$ & $w_4$ & $\hat{g}$ & $U_4$ \\
 \midrule
 request & 0 & 123.7 $\pm$ 5.4 & 1.18 & 0.15 & 4.00 & 1.55 $\pm$ 0.09 & 1.56 $\pm$ 0.08 & 2.41 $\pm$ 0.05 & 2.39 $\pm$ 0.08 & 2.12 & 7.79 & 1.000 & 0.41 \\
 request & 5 & 115.7 $\pm$ 3.1 & 1.64 & 0.19 & 4.00 & -- & 1.29 $\pm$ 0.04 & 2.38 $\pm$ 0.06 & -- & 2.80 & 12.57 & 1.000 & 0.42 \\
@@ -31,8 +32,8 @@ request & 20 & 99.4 $\pm$ 0.8 & 3.06 & 0.30 & 3.29 & -- & 1.02 $\pm$ 0.02 & 2.51
 request & 30 & 92.1 $\pm$ 1.0 & 3.96 & 0.36 & 2.74 & 1.42 $\pm$ 0.03 & 1.01 $\pm$ 0.02 & 2.65 $\pm$ 0.05 & 2.36 $\pm$ 0.06 & 5.32 & 25.73 & 1.000 & 0.50 \\
 request & 100 & 54.8 $\pm$ 3.4 & 11.26 & 0.62 & 1.62 & 1.23 $\pm$ 0.08 & 1.14 $\pm$ 0.07 & 3.10 $\pm$ 0.09 & 1.72 $\pm$ 0.03 & 12.36 & 42.17 & 1.000 & 0.77 \\
 request & 300 & 26.7 $\pm$ 0.4 & 30.46 & 0.81 & 1.23 & 1.06 $\pm$ 0.02 & 1.05 $\pm$ 0.03 & 3.52 $\pm$ 0.08 & 1.26 $\pm$ 0.03 & 32.86 & 101.65 & 1.000 & 0.92 \\
-request & 1000 & 8.71 $\pm$ 0.20 & 105.20 & 0.92 & 1.09 & 1.06 $\pm$ 0.03 & 0.95 $\pm$ 0.03 & 3.90 $\pm$ 0.14 & 1.11 $\pm$ 0.04 & 115.83 & 356.59 & 1.000 & 0.95 \\
-request & 3000 & 3.10 $\pm$ 0.07 & 313.75 & 0.97 & 1.03 & 0.92 $\pm$ 0.13$^\dagger$ & 0.97 $\pm$ 0.03 & 4.00 $\pm$ 0.12 & 1.03 $\pm$ 0.05 & 328.84 & 994.16 & 1.000 & 0.98 \\
+request & 1000 & 8.71 $\pm$ 0.20$^{\ddagger}$ & 105.20 & 0.92 & 1.09 & 1.06 $\pm$ 0.03$^{\ddagger}$ & 0.95 $\pm$ 0.03 & 3.90 $\pm$ 0.14 & 1.11 $\pm$ 0.04 & 115.83 & 356.59 & 1.000 & 0.95 \\
+request & 3000 & 3.10 $\pm$ 0.07$^{\ddagger}$ & 313.75 & 0.97 & 1.03 & 0.92 $\pm$ 0.13$^\dagger$$^{\ddagger}$ & 0.97 $\pm$ 0.03$^{\ddagger}$ & 4.00 $\pm$ 0.12 & 1.03 $\pm$ 0.05$^{\ddagger}$ & 328.84 & 994.16 & 1.000 & 0.98 \\
 \midrule
 batch & 0 & 128.6 $\pm$ 2.2 & 1.21 & 0.16 & 4.00 & 1.56 $\pm$ 0.03 & 2.16 $\pm$ 0.04 & 2.31 $\pm$ 0.05 & -- & 2.39 & 1.65 & 0.021 & 0.66 \\
 batch & 5 & 119.7 $\pm$ 3.0 & 1.71 & 0.20 & 4.00 & -- & 2.10 $\pm$ 0.06 & 2.37 $\pm$ 0.05 & -- & 3.27 & 2.88 & 0.021 & 0.82 \\
@@ -41,11 +42,11 @@ batch & 20 & 101.9 $\pm$ 1.1 & 3.11 & 0.32 & 3.16 & -- & 1.77 $\pm$ 0.04 & 2.51 
 batch & 30 & 95.5 $\pm$ 0.7 & 4.04 & 0.39 & 2.59 & 1.57 $\pm$ 0.07 & 1.64 $\pm$ 0.02 & 2.58 $\pm$ 0.07 & -- & 5.91 & 12.11 & 0.021 & 0.93 \\
 batch & 100 & 57.3 $\pm$ 0.9 & 10.93 & 0.63 & 1.60 & 1.33 $\pm$ 0.04 & 1.28 $\pm$ 0.02 & 3.08 $\pm$ 0.10 & -- & 13.10 & 35.60 & 0.020 & 0.96 \\
 batch & 300 & 26.9 $\pm$ 0.3 & 30.68 & 0.83 & 1.21 & 1.09 $\pm$ 0.03 & 1.03 $\pm$ 0.06 & 3.58 $\pm$ 0.07 & -- & 35.46 & 103.41 & 0.020 & 0.98 \\
-batch & 1000 & 8.84 $\pm$ 0.22 & 104.04 & 0.92 & 1.09 & 1.00 $\pm$ 0.04 & 1.00 $\pm$ 0.03 & 3.92 $\pm$ 0.08 & -- & 220.55 & 224.83 & 0.021 & n/a \\
-batch & 3000 & 3.07 $\pm$ 0.08 & 317.30 & 0.97 & 1.03 & 0.98 $\pm$ 0.05 & 0.99 $\pm$ 0.03 & 4.01 $\pm$ 0.18 & -- & 986.63 & 318.14 & 0.023 & n/a \\
+batch & 1000 & 8.84 $\pm$ 0.22$^{\ddagger}$ & 104.04 & 0.92 & 1.09 & 1.00 $\pm$ 0.04$^{\ddagger}$ & 1.00 $\pm$ 0.03 & 3.92 $\pm$ 0.08 & -- & 220.55 & 224.83 & 0.021 & n/a \\
+batch & 3000 & 3.07 $\pm$ 0.08$^{\ddagger}$ & 317.30 & 0.97 & 1.03 & 0.98 $\pm$ 0.05$^{\ddagger}$ & 0.99 $\pm$ 0.03$^{\ddagger}$ & 4.01 $\pm$ 0.18 & -- & 986.63 & 318.14 & 0.023 & n/a \\
 \bottomrule
 \end{tabular}
 
 \vspace{2pt}
-\parbox{\linewidth}{\footnotesize $t_{p,4}$ and $w_4$ in $\mu$s. n/a: with batching and long handlers the interpreter's switch interval interrupts a batch, so the recorded hold includes time waiting to resume. The rows without $S_2$ were measured in the supplementary run, at one and four workers. $^\dagger$ A configuration in this ratio had a coefficient of variation above 5\%.}
+\parbox{\linewidth}{\footnotesize $t_{p,4}$ and $w_4$ in $\mu$s. n/a: with batching and long handlers the interpreter's switch interval interrupts a batch, so the recorded hold includes time waiting to resume. The rows without $S_2$ were measured in the supplementary run, at one and four workers. $^{\ddagger}$ Runs behind this cell reported socket errors (at most 0.37\% of a run's requests). $^\dagger$ A configuration in this ratio had a coefficient of variation above 5\%.}
 \end{table*}

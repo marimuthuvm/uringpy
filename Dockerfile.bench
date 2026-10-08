@@ -57,5 +57,9 @@ RUN if [ "${FREE_THREADED}" != "1" ]; then \
     fi
 # The interpreter must be in the requested GIL state with uringpy loaded.
 RUN python3 -c "import os, sys, uringpy; g = getattr(sys, '_is_gil_enabled', lambda: True)(); print('python', sys.version.split()[0], 'gil_enabled', g); assert g == (os.environ['FREE_THREADED'] != '1')"
+# On the GIL build the interpreter's count of GIL hand-offs must be readable
+# (uringpy._gilstat is optional in setup.py, so a failed build would otherwise
+# go unnoticed), and importing it must not turn the GIL on elsewhere.
+RUN python3 -c "import os, sys; from uringpy import _gilstat; n = _gilstat.switch_count(); g = getattr(sys, '_is_gil_enabled', lambda: True)(); print('gil switch counter', n, 'gil_enabled', g); assert g == (os.environ['FREE_THREADED'] != '1'); assert isinstance(n, int) or not g"
 
 CMD ["pytest", "-q"]

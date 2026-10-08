@@ -14,6 +14,7 @@
 %   scaling-uringpy-5db4eab-20261007T071026Z: 200/200 runs ok, commit 5db4eab, image sha256:afe3a37b1f7d
 %   scaling-uringpy-5db4eabt-20261007T121646Z: 120/120 runs ok, commit 5db4eab, image sha256:1ebee854d3c1
 %   size-uringpy-5db4eab-20261007T160752Z: 60/60 runs ok, commit 5db4eab, image sha256:afe3a37b1f7d
+%   superseded/loops-uringpy-5db4eab-loops-20261007T191746Z: read for meta:anchor-* only
 \makeatletter
 \@namedef{v@C:app/f/asyncio-app/process/1}{1.07}
 \@namedef{v@C:app/f/asyncio-app/process/2}{2.14}
@@ -1505,6 +1506,15 @@
 \@namedef{v@bound:handler/g/uringpy-app/thread/4/h300}{1.23}
 \@namedef{v@bound:handler/g/uringpy-app/thread/4/h3000}{1.03}
 \@namedef{v@bound:handler/g/uringpy-app/thread/4/h5}{4.00}
+\@namedef{v@boundgap:h0}{85}
+\@namedef{v@boundgap:h10}{100}
+\@namedef{v@boundgap:h100}{25}
+\@namedef{v@boundgap:h1000}{9}
+\@namedef{v@boundgap:h20}{78}
+\@namedef{v@boundgap:h30}{58}
+\@namedef{v@boundgap:h300}{18}
+\@namedef{v@boundgap:h3000}{4}
+\@namedef{v@boundgap:h5}{90}
 \@namedef{v@cli:app/f/asyncio-app/process/1}{18}
 \@namedef{v@cli:app/f/asyncio-app/process/2}{34}
 \@namedef{v@cli:app/f/asyncio-app/process/4}{51}
@@ -3242,9 +3252,9 @@
 \@namedef{v@fpy-bound:py-epoll}{6.9}
 \@namedef{v@fpy-bound:py-epoll-batch}{98.9}
 \@namedef{v@fpy-bound:py-uring}{13.8}
-\@namedef{v@fpy:py-epoll}{0.14}
-\@namedef{v@fpy:py-epoll-batch}{0.01}
-\@namedef{v@fpy:py-uring}{0.07}
+\@namedef{v@fpy:py-epoll}{0.145}
+\@namedef{v@fpy:py-epoll-batch}{0.010}
+\@namedef{v@fpy:py-uring}{0.072}
 \@namedef{v@gbit:size/g/uringpy/process/4/s1024}{2.9}
 \@namedef{v@gbit:size/g/uringpy/process/4/s1048576}{15.7}
 \@namedef{v@gbit:size/g/uringpy/process/4/s16384}{15.7}
@@ -3559,6 +3569,149 @@
 \@namedef{v@ho:size/g/uringpy/process/4/s262144}{0.000}
 \@namedef{v@ho:size/g/uringpy/process/4/s64}{0.000}
 \@namedef{v@ho:size/g/uringpy/process/4/s65536}{0.000}
+\@namedef{v@lockcap:gilbatch/g/uringpy-app-batch/thread/1}{842.5}
+\@namedef{v@lockcap:gilbatch/g/uringpy-app-batch/thread/2}{611.4}
+\@namedef{v@lockcap:gilbatch/g/uringpy-app-batch/thread/4}{423.3}
+\@namedef{v@lockcap:gilbatch/g/uringpy-app-batch1/thread/1}{808.6}
+\@namedef{v@lockcap:gilbatch/g/uringpy-app-batch1/thread/2}{619.9}
+\@namedef{v@lockcap:gilbatch/g/uringpy-app-batch1/thread/4}{462.7}
+\@namedef{v@lockcap:gilbatch/g/uringpy-app-batch16/thread/1}{855.1}
+\@namedef{v@lockcap:gilbatch/g/uringpy-app-batch16/thread/2}{613.8}
+\@namedef{v@lockcap:gilbatch/g/uringpy-app-batch16/thread/4}{426.1}
+\@namedef{v@lockcap:gilbatch/g/uringpy-app-batch2/thread/1}{835.0}
+\@namedef{v@lockcap:gilbatch/g/uringpy-app-batch2/thread/2}{609.0}
+\@namedef{v@lockcap:gilbatch/g/uringpy-app-batch2/thread/4}{460.9}
+\@namedef{v@lockcap:gilbatch/g/uringpy-app-batch4/thread/1}{864.7}
+\@namedef{v@lockcap:gilbatch/g/uringpy-app-batch4/thread/2}{601.9}
+\@namedef{v@lockcap:gilbatch/g/uringpy-app-batch4/thread/4}{444.1}
+\@namedef{v@lockcap:gilbatch/g/uringpy-app-batch64/thread/1}{839.9}
+\@namedef{v@lockcap:gilbatch/g/uringpy-app-batch64/thread/2}{598.4}
+\@namedef{v@lockcap:gilbatch/g/uringpy-app-batch64/thread/4}{426.5}
+\@namedef{v@lockcap:gilbatch/g/uringpy-app-batch8/thread/1}{860.7}
+\@namedef{v@lockcap:gilbatch/g/uringpy-app-batch8/thread/2}{596.8}
+\@namedef{v@lockcap:gilbatch/g/uringpy-app-batch8/thread/4}{428.6}
+\@namedef{v@lockcap:gilbatch/g/uringpy-app/thread/1}{853.9}
+\@namedef{v@lockcap:gilbatch/g/uringpy-app/thread/2}{598.6}
+\@namedef{v@lockcap:gilbatch/g/uringpy-app/thread/4}{472.0}
+\@namedef{v@lockcap:handler/f/uringpy-app/thread/1}{765.4}
+\@namedef{v@lockcap:handler/f/uringpy-app/thread/1/h100}{87.3}
+\@namedef{v@lockcap:handler/f/uringpy-app/thread/1/h1000}{9.1}
+\@namedef{v@lockcap:handler/f/uringpy-app/thread/1/h30}{234.2}
+\@namedef{v@lockcap:handler/f/uringpy-app/thread/1/h300}{30.7}
+\@namedef{v@lockcap:handler/f/uringpy-app/thread/1/h3000}{3.0}
+\@namedef{v@lockcap:handler/f/uringpy-app/thread/2}{535.4}
+\@namedef{v@lockcap:handler/f/uringpy-app/thread/2/h100}{64.0}
+\@namedef{v@lockcap:handler/f/uringpy-app/thread/2/h1000}{6.8}
+\@namedef{v@lockcap:handler/f/uringpy-app/thread/2/h30}{169.7}
+\@namedef{v@lockcap:handler/f/uringpy-app/thread/2/h300}{22.3}
+\@namedef{v@lockcap:handler/f/uringpy-app/thread/2/h3000}{2.3}
+\@namedef{v@lockcap:handler/f/uringpy-app/thread/4}{327.5}
+\@namedef{v@lockcap:handler/f/uringpy-app/thread/4/h100}{28.0}
+\@namedef{v@lockcap:handler/f/uringpy-app/thread/4/h1000}{2.4}
+\@namedef{v@lockcap:handler/f/uringpy-app/thread/4/h30}{97.6}
+\@namedef{v@lockcap:handler/f/uringpy-app/thread/4/h300}{8.4}
+\@namedef{v@lockcap:handler/f/uringpy-app/thread/4/h3000}{0.8}
+\@namedef{v@lockcap:handler/g/uringpy-app-batch/process/1}{818.0}
+\@namedef{v@lockcap:handler/g/uringpy-app-batch/process/1/h10}{466.0}
+\@namedef{v@lockcap:handler/g/uringpy-app-batch/process/1/h100}{91.6}
+\@namedef{v@lockcap:handler/g/uringpy-app-batch/process/1/h1000}{9.7}
+\@namedef{v@lockcap:handler/g/uringpy-app-batch/process/1/h20}{325.5}
+\@namedef{v@lockcap:handler/g/uringpy-app-batch/process/1/h30}{253.1}
+\@namedef{v@lockcap:handler/g/uringpy-app-batch/process/1/h300}{32.3}
+\@namedef{v@lockcap:handler/g/uringpy-app-batch/process/1/h3000}{3.1}
+\@namedef{v@lockcap:handler/g/uringpy-app-batch/process/1/h5}{579.1}
+\@namedef{v@lockcap:handler/g/uringpy-app-batch/process/2}{563.4}
+\@namedef{v@lockcap:handler/g/uringpy-app-batch/process/2/h100}{78.6}
+\@namedef{v@lockcap:handler/g/uringpy-app-batch/process/2/h1000}{9.3}
+\@namedef{v@lockcap:handler/g/uringpy-app-batch/process/2/h30}{195.8}
+\@namedef{v@lockcap:handler/g/uringpy-app-batch/process/2/h300}{31.1}
+\@namedef{v@lockcap:handler/g/uringpy-app-batch/process/2/h3000}{3.1}
+\@namedef{v@lockcap:handler/g/uringpy-app-batch/process/4}{368.7}
+\@namedef{v@lockcap:handler/g/uringpy-app-batch/process/4/h10}{217.0}
+\@namedef{v@lockcap:handler/g/uringpy-app-batch/process/4/h100}{65.2}
+\@namedef{v@lockcap:handler/g/uringpy-app-batch/process/4/h1000}{9.2}
+\@namedef{v@lockcap:handler/g/uringpy-app-batch/process/4/h20}{164.0}
+\@namedef{v@lockcap:handler/g/uringpy-app-batch/process/4/h30}{139.0}
+\@namedef{v@lockcap:handler/g/uringpy-app-batch/process/4/h300}{27.9}
+\@namedef{v@lockcap:handler/g/uringpy-app-batch/process/4/h3000}{3.1}
+\@namedef{v@lockcap:handler/g/uringpy-app-batch/process/4/h5}{259.4}
+\@namedef{v@lockcap:handler/g/uringpy-app-batch/thread/1}{825.5}
+\@namedef{v@lockcap:handler/g/uringpy-app-batch/thread/1/h10}{467.2}
+\@namedef{v@lockcap:handler/g/uringpy-app-batch/thread/1/h100}{91.5}
+\@namedef{v@lockcap:handler/g/uringpy-app-batch/thread/1/h1000}{9.6}
+\@namedef{v@lockcap:handler/g/uringpy-app-batch/thread/1/h20}{321.7}
+\@namedef{v@lockcap:handler/g/uringpy-app-batch/thread/1/h30}{247.8}
+\@namedef{v@lockcap:handler/g/uringpy-app-batch/thread/1/h300}{32.6}
+\@namedef{v@lockcap:handler/g/uringpy-app-batch/thread/1/h3000}{3.2}
+\@namedef{v@lockcap:handler/g/uringpy-app-batch/thread/1/h5}{584.3}
+\@namedef{v@lockcap:handler/g/uringpy-app-batch/thread/2}{593.8}
+\@namedef{v@lockcap:handler/g/uringpy-app-batch/thread/2/h100}{78.5}
+\@namedef{v@lockcap:handler/g/uringpy-app-batch/thread/2/h1000}{5.7}
+\@namedef{v@lockcap:handler/g/uringpy-app-batch/thread/2/h30}{188.3}
+\@namedef{v@lockcap:handler/g/uringpy-app-batch/thread/2/h300}{29.6}
+\@namedef{v@lockcap:handler/g/uringpy-app-batch/thread/2/h3000}{1.7}
+\@namedef{v@lockcap:handler/g/uringpy-app-batch/thread/4}{419.0}
+\@namedef{v@lockcap:handler/g/uringpy-app-batch/thread/4/h10}{259.5}
+\@namedef{v@lockcap:handler/g/uringpy-app-batch/thread/4/h100}{76.3}
+\@namedef{v@lockcap:handler/g/uringpy-app-batch/thread/4/h1000}{4.5}
+\@namedef{v@lockcap:handler/g/uringpy-app-batch/thread/4/h20}{197.8}
+\@namedef{v@lockcap:handler/g/uringpy-app-batch/thread/4/h30}{169.2}
+\@namedef{v@lockcap:handler/g/uringpy-app-batch/thread/4/h300}{28.2}
+\@namedef{v@lockcap:handler/g/uringpy-app-batch/thread/4/h3000}{1.0}
+\@namedef{v@lockcap:handler/g/uringpy-app-batch/thread/4/h5}{305.8}
+\@namedef{v@lockcap:handler/g/uringpy-app/process/1}{836.5}
+\@namedef{v@lockcap:handler/g/uringpy-app/process/1/h10}{475.2}
+\@namedef{v@lockcap:handler/g/uringpy-app/process/1/h100}{91.5}
+\@namedef{v@lockcap:handler/g/uringpy-app/process/1/h1000}{9.7}
+\@namedef{v@lockcap:handler/g/uringpy-app/process/1/h20}{333.7}
+\@namedef{v@lockcap:handler/g/uringpy-app/process/1/h30}{256.6}
+\@namedef{v@lockcap:handler/g/uringpy-app/process/1/h300}{32.6}
+\@namedef{v@lockcap:handler/g/uringpy-app/process/1/h3000}{3.2}
+\@namedef{v@lockcap:handler/g/uringpy-app/process/1/h5}{617.0}
+\@namedef{v@lockcap:handler/g/uringpy-app/process/2}{611.1}
+\@namedef{v@lockcap:handler/g/uringpy-app/process/2/h100}{82.1}
+\@namedef{v@lockcap:handler/g/uringpy-app/process/2/h1000}{9.4}
+\@namedef{v@lockcap:handler/g/uringpy-app/process/2/h30}{207.2}
+\@namedef{v@lockcap:handler/g/uringpy-app/process/2/h300}{31.1}
+\@namedef{v@lockcap:handler/g/uringpy-app/process/2/h3000}{3.2}
+\@namedef{v@lockcap:handler/g/uringpy-app/process/4}{385.4}
+\@namedef{v@lockcap:handler/g/uringpy-app/process/4/h10}{227.7}
+\@namedef{v@lockcap:handler/g/uringpy-app/process/4/h100}{66.4}
+\@namedef{v@lockcap:handler/g/uringpy-app/process/4/h1000}{9.2}
+\@namedef{v@lockcap:handler/g/uringpy-app/process/4/h20}{168.3}
+\@namedef{v@lockcap:handler/g/uringpy-app/process/4/h30}{145.3}
+\@namedef{v@lockcap:handler/g/uringpy-app/process/4/h300}{27.7}
+\@namedef{v@lockcap:handler/g/uringpy-app/process/4/h3000}{3.2}
+\@namedef{v@lockcap:handler/g/uringpy-app/process/4/h5}{280.7}
+\@namedef{v@lockcap:handler/g/uringpy-app/thread/1}{846.8}
+\@namedef{v@lockcap:handler/g/uringpy-app/thread/1/h10}{470.4}
+\@namedef{v@lockcap:handler/g/uringpy-app/thread/1/h100}{88.8}
+\@namedef{v@lockcap:handler/g/uringpy-app/thread/1/h1000}{9.5}
+\@namedef{v@lockcap:handler/g/uringpy-app/thread/1/h20}{326.7}
+\@namedef{v@lockcap:handler/g/uringpy-app/thread/1/h30}{252.3}
+\@namedef{v@lockcap:handler/g/uringpy-app/thread/1/h300}{32.8}
+\@namedef{v@lockcap:handler/g/uringpy-app/thread/1/h3000}{3.2}
+\@namedef{v@lockcap:handler/g/uringpy-app/thread/1/h5}{608.7}
+\@namedef{v@lockcap:handler/g/uringpy-app/thread/2}{626.7}
+\@namedef{v@lockcap:handler/g/uringpy-app/thread/2/h100}{79.7}
+\@namedef{v@lockcap:handler/g/uringpy-app/thread/2/h1000}{9.5}
+\@namedef{v@lockcap:handler/g/uringpy-app/thread/2/h30}{204.9}
+\@namedef{v@lockcap:handler/g/uringpy-app/thread/2/h300}{30.4}
+\@namedef{v@lockcap:handler/g/uringpy-app/thread/2/h3000}{2.9}
+\@namedef{v@lockcap:handler/g/uringpy-app/thread/4}{470.9}
+\@namedef{v@lockcap:handler/g/uringpy-app/thread/4/h10}{291.1}
+\@namedef{v@lockcap:handler/g/uringpy-app/thread/4/h100}{80.9}
+\@namedef{v@lockcap:handler/g/uringpy-app/thread/4/h1000}{8.6}
+\@namedef{v@lockcap:handler/g/uringpy-app/thread/4/h20}{220.1}
+\@namedef{v@lockcap:handler/g/uringpy-app/thread/4/h30}{187.9}
+\@namedef{v@lockcap:handler/g/uringpy-app/thread/4/h300}{30.4}
+\@namedef{v@lockcap:handler/g/uringpy-app/thread/4/h3000}{3.0}
+\@namedef{v@lockcap:handler/g/uringpy-app/thread/4/h5}{357.3}
+\@namedef{v@meta:anchor-max}{1.01}
+\@namedef{v@meta:anchor-min}{0.97}
+\@namedef{v@meta:anchor-n}{12}
+\@namedef{v@meta:bound-gap-max}{25}
+\@namedef{v@meta:bound-gap-min}{4}
 \@namedef{v@meta:cells}{428}
 \@namedef{v@meta:client-max-cell}{78}
 \@namedef{v@meta:client-max-run}{88}
@@ -3581,6 +3734,9 @@
 \@namedef{v@meta:handler-error-runs}{0}
 \@namedef{v@meta:last-day}{2026-10-07}
 \@namedef{v@meta:non2xx-runs}{0}
+\@namedef{v@meta:proc-C4-min}{3.88}
+\@namedef{v@meta:proc-S-max}{2.72}
+\@namedef{v@meta:proc-S-min}{2.26}
 \@namedef{v@meta:runs}{2140}
 \@namedef{v@meta:runs-made}{2190}
 \@namedef{v@meta:sockerr-experiments}{handler, load, size}
@@ -4371,7 +4527,7 @@
 \@namedef{v@p50:load/g/uringpy-app/thread/4/c1600}{8.4}
 \@namedef{v@p50:load/g/uringpy-app/thread/4/c64}{0.5}
 \@namedef{v@p50:load/g/uringpy/thread/1}{2.7}
-\@namedef{v@p50:load/g/uringpy/thread/1/c16}{0.2}
+\@namedef{v@p50:load/g/uringpy/thread/1/c16}{0.1}
 \@namedef{v@p50:load/g/uringpy/thread/1/c1600}{11.2}
 \@namedef{v@p50:load/g/uringpy/thread/1/c64}{0.4}
 \@namedef{v@p50:load/g/uringpy/thread/4}{1.1}
@@ -4450,7 +4606,7 @@
 \@namedef{v@p50:size/g/asyncio-proto/process/4/s65536}{13.0}
 \@namedef{v@p50:size/g/uringpy/process/4/s1024}{1.2}
 \@namedef{v@p50:size/g/uringpy/process/4/s1048576}{206.8}
-\@namedef{v@p50:size/g/uringpy/process/4/s16384}{3.2}
+\@namedef{v@p50:size/g/uringpy/process/4/s16384}{3.1}
 \@namedef{v@p50:size/g/uringpy/process/4/s262144}{50.1}
 \@namedef{v@p50:size/g/uringpy/process/4/s64}{1.2}
 \@namedef{v@p50:size/g/uringpy/process/4/s65536}{12.9}
@@ -5602,13 +5758,13 @@
 \@namedef{v@rpm:handoff-epoll/4}{4.38 \pm 0.11}
 \@namedef{v@rpm:held/1}{1.01 \pm 0.06}
 \@namedef{v@rpm:held/2}{0.61 \pm 0.02}
-\@namedef{v@rpm:held/4}{0.43 \pm <0.01}
+\@namedef{v@rpm:held/4}{0.43 \pm {<}0.01}
 \@namedef{v@rpm:iface-batched/1}{1.08 \pm 0.04}
 \@namedef{v@rpm:iface-batched/2}{1.06 \pm 0.04}
 \@namedef{v@rpm:iface-batched/4}{1.01 \pm 0.01}
 \@namedef{v@rpm:iface-c/1}{1.15 \pm 0.02}
 \@namedef{v@rpm:iface-c/2}{1.17 \pm 0.04}
-\@namedef{v@rpm:iface-c/4}{1.11 \pm <0.01}
+\@namedef{v@rpm:iface-c/4}{1.11 \pm {<}0.01}
 \@namedef{v@rpm:iface-py/1}{1.25 \pm 0.05}
 \@namedef{v@rpm:iface-py/2}{1.51 \pm 0.05}
 \@namedef{v@rpm:iface-py/4}{4.40 \pm 0.12}
@@ -5626,7 +5782,7 @@
 \@namedef{v@rpm:loop-uring/4}{1.12 \pm 0.01}
 \@namedef{v@rpm:pybatch-over-cepoll/1}{0.99 \pm 0.02}
 \@namedef{v@rpm:pybatch-over-cepoll/2}{0.98 \pm 0.04}
-\@namedef{v@rpm:pybatch-over-cepoll/4}{0.98 \pm <0.01}
+\@namedef{v@rpm:pybatch-over-cepoll/4}{0.98 \pm {<}0.01}
 \@namedef{v@rpm:pybatch-over-pyuring/1}{0.93 \pm 0.04}
 \@namedef{v@rpm:pybatch-over-pyuring/2}{0.94 \pm 0.03}
 \@namedef{v@rpm:pybatch-over-pyuring/4}{0.99 \pm 0.01}
@@ -5646,7 +5802,7 @@
 \@namedef{v@rpm:thread-over-process:app/f/asyncio-proto-app/thread/4}{0.97 \pm 0.01}
 \@namedef{v@rpm:thread-over-process:app/f/c-epoll-app-batch/thread/1}{1.00 \pm 0.03}
 \@namedef{v@rpm:thread-over-process:app/f/c-epoll-app-batch/thread/2}{0.99 \pm 0.01}
-\@namedef{v@rpm:thread-over-process:app/f/c-epoll-app-batch/thread/4}{0.99 \pm <0.01}
+\@namedef{v@rpm:thread-over-process:app/f/c-epoll-app-batch/thread/4}{0.99 \pm {<}0.01}
 \@namedef{v@rpm:thread-over-process:app/f/c-epoll-app/thread/1}{0.99 \pm 0.03}
 \@namedef{v@rpm:thread-over-process:app/f/c-epoll-app/thread/2}{0.98 \pm 0.03}
 \@namedef{v@rpm:thread-over-process:app/f/c-epoll-app/thread/4}{0.98 \pm 0.01}
@@ -5667,7 +5823,7 @@
 \@namedef{v@rpm:thread-over-process:app/g/c-epoll-app-batch/thread/4}{0.95 \pm 0.01}
 \@namedef{v@rpm:thread-over-process:app/g/c-epoll-app/thread/1}{0.99 \pm 0.02}
 \@namedef{v@rpm:thread-over-process:app/g/c-epoll-app/thread/2}{0.74 \pm 0.02}
-\@namedef{v@rpm:thread-over-process:app/g/c-epoll-app/thread/4}{0.28 \pm <0.01}
+\@namedef{v@rpm:thread-over-process:app/g/c-epoll-app/thread/4}{0.28 \pm {<}0.01}
 \@namedef{v@rpm:thread-over-process:app/g/uringpy-app-batch/thread/1}{0.99 \pm 0.03}
 \@namedef{v@rpm:thread-over-process:app/g/uringpy-app-batch/thread/2}{0.98 \pm 0.02}
 \@namedef{v@rpm:thread-over-process:app/g/uringpy-app-batch/thread/4}{0.93 \pm 0.02}
@@ -5676,25 +5832,25 @@
 \@namedef{v@rpm:thread-over-process:app/g/uringpy-app/thread/4}{0.68 \pm 0.02}
 \@namedef{v@rpm:thread-over-process:app/g/uvloop-proto-app/thread/1}{1.00 \pm 0.02}
 \@namedef{v@rpm:thread-over-process:app/g/uvloop-proto-app/thread/2}{0.48 \pm 0.01}
-\@namedef{v@rpm:thread-over-process:app/g/uvloop-proto-app/thread/4}{0.14 \pm <0.01}
+\@namedef{v@rpm:thread-over-process:app/g/uvloop-proto-app/thread/4}{0.14 \pm {<}0.01}
 \@namedef{v@rpm:thread-over-process:factorial/g/c-epoll/thread/1}{0.99 \pm 0.02}
 \@namedef{v@rpm:thread-over-process:factorial/g/c-epoll/thread/2}{0.99 \pm 0.03}
-\@namedef{v@rpm:thread-over-process:factorial/g/c-epoll/thread/4}{0.99 \pm <0.01}
+\@namedef{v@rpm:thread-over-process:factorial/g/c-epoll/thread/4}{0.99 \pm {<}0.01}
 \@namedef{v@rpm:thread-over-process:factorial/g/py-epoll-batch/thread/1}{0.99 \pm 0.04}
 \@namedef{v@rpm:thread-over-process:factorial/g/py-epoll-batch/thread/2}{0.98 \pm 0.04}
-\@namedef{v@rpm:thread-over-process:factorial/g/py-epoll-batch/thread/4}{0.99 \pm <0.01}
+\@namedef{v@rpm:thread-over-process:factorial/g/py-epoll-batch/thread/4}{0.99 \pm {<}0.01}
 \@namedef{v@rpm:thread-over-process:factorial/g/py-epoll/thread/1}{1.02 \pm 0.03}
 \@namedef{v@rpm:thread-over-process:factorial/g/py-epoll/thread/2}{0.79 \pm 0.02}
 \@namedef{v@rpm:thread-over-process:factorial/g/py-epoll/thread/4}{0.25 \pm 0.01}
 \@namedef{v@rpm:thread-over-process:factorial/g/py-uring-held/thread/1}{1.01 \pm 0.06}
 \@namedef{v@rpm:thread-over-process:factorial/g/py-uring-held/thread/2}{0.61 \pm 0.02}
-\@namedef{v@rpm:thread-over-process:factorial/g/py-uring-held/thread/4}{0.42 \pm <0.01}
+\@namedef{v@rpm:thread-over-process:factorial/g/py-uring-held/thread/4}{0.42 \pm {<}0.01}
 \@namedef{v@rpm:thread-over-process:factorial/g/py-uring/thread/1}{1.02 \pm 0.04}
 \@namedef{v@rpm:thread-over-process:factorial/g/py-uring/thread/2}{0.99 \pm 0.02}
 \@namedef{v@rpm:thread-over-process:factorial/g/py-uring/thread/4}{0.95 \pm 0.01}
 \@namedef{v@rpm:thread-over-process:factorial/g/uringpy/thread/1}{1.01 \pm 0.02}
 \@namedef{v@rpm:thread-over-process:factorial/g/uringpy/thread/2}{1.03 \pm 0.04}
-\@namedef{v@rpm:thread-over-process:factorial/g/uringpy/thread/4}{1.00 \pm <0.01}
+\@namedef{v@rpm:thread-over-process:factorial/g/uringpy/thread/4}{1.00 \pm {<}0.01}
 \@namedef{v@rpm:thread-over-process:handler/g/uringpy-app-batch/thread/1}{0.99 \pm 0.03}
 \@namedef{v@rpm:thread-over-process:handler/g/uringpy-app-batch/thread/1/h10}{1.00 \pm 0.02}
 \@namedef{v@rpm:thread-over-process:handler/g/uringpy-app-batch/thread/1/h100}{1.00 \pm 0.03}
@@ -5757,24 +5913,24 @@
 \@namedef{v@rpm:thread-over-process:scaling/f/uringpy/thread/4}{1.00 \pm 0.01}
 \@namedef{v@rpm:thread-over-process:scaling/g/asyncio-proto/thread/1}{1.02 \pm 0.02}
 \@namedef{v@rpm:thread-over-process:scaling/g/asyncio-proto/thread/2}{0.60 \pm 0.01}
-\@namedef{v@rpm:thread-over-process:scaling/g/asyncio-proto/thread/3}{0.30 \pm <0.01}
-\@namedef{v@rpm:thread-over-process:scaling/g/asyncio-proto/thread/4}{0.19 \pm <0.01}
+\@namedef{v@rpm:thread-over-process:scaling/g/asyncio-proto/thread/3}{0.30 \pm {<}0.01}
+\@namedef{v@rpm:thread-over-process:scaling/g/asyncio-proto/thread/4}{0.19 \pm {<}0.01}
 \@namedef{v@rpm:thread-over-process:scaling/g/asyncio/thread/1}{1.00 \pm 0.02}
 \@namedef{v@rpm:thread-over-process:scaling/g/asyncio/thread/2}{0.41 \pm 0.01}
-\@namedef{v@rpm:thread-over-process:scaling/g/asyncio/thread/3}{0.23 \pm <0.01}
-\@namedef{v@rpm:thread-over-process:scaling/g/asyncio/thread/4}{0.19 \pm <0.01}
+\@namedef{v@rpm:thread-over-process:scaling/g/asyncio/thread/3}{0.23 \pm {<}0.01}
+\@namedef{v@rpm:thread-over-process:scaling/g/asyncio/thread/4}{0.19 \pm {<}0.01}
 \@namedef{v@rpm:thread-over-process:scaling/g/uringpy/thread/1}{1.01 \pm 0.03}
 \@namedef{v@rpm:thread-over-process:scaling/g/uringpy/thread/2}{1.02 \pm 0.03}
 \@namedef{v@rpm:thread-over-process:scaling/g/uringpy/thread/3}{1.00 \pm 0.02}
-\@namedef{v@rpm:thread-over-process:scaling/g/uringpy/thread/4}{1.00 \pm <0.01}
+\@namedef{v@rpm:thread-over-process:scaling/g/uringpy/thread/4}{1.00 \pm {<}0.01}
 \@namedef{v@rpm:thread-over-process:scaling/g/uvloop-proto/thread/1}{0.99 \pm 0.04}
 \@namedef{v@rpm:thread-over-process:scaling/g/uvloop-proto/thread/2}{0.49 \pm 0.01}
-\@namedef{v@rpm:thread-over-process:scaling/g/uvloop-proto/thread/3}{0.25 \pm <0.01}
-\@namedef{v@rpm:thread-over-process:scaling/g/uvloop-proto/thread/4}{0.14 \pm <0.01}
+\@namedef{v@rpm:thread-over-process:scaling/g/uvloop-proto/thread/3}{0.25 \pm {<}0.01}
+\@namedef{v@rpm:thread-over-process:scaling/g/uvloop-proto/thread/4}{0.14 \pm {<}0.01}
 \@namedef{v@rpm:thread-over-process:scaling/g/uvloop/thread/1}{0.99 \pm 0.02}
 \@namedef{v@rpm:thread-over-process:scaling/g/uvloop/thread/2}{0.54 \pm 0.01}
 \@namedef{v@rpm:thread-over-process:scaling/g/uvloop/thread/3}{0.32 \pm 0.01}
-\@namedef{v@rpm:thread-over-process:scaling/g/uvloop/thread/4}{0.22 \pm <0.01}
+\@namedef{v@rpm:thread-over-process:scaling/g/uvloop/thread/4}{0.22 \pm {<}0.01}
 \@namedef{v@rpm:timed-over-untimed/4}{0.96 \pm 0.03}
 \@namedef{v@rpm:uringpy-app-batch/process-over-asyncio-app/process/f/1}{2.19 \pm 0.06}
 \@namedef{v@rpm:uringpy-app-batch/process-over-asyncio-app/process/f/2}{2.07 \pm 0.07}
@@ -5831,7 +5987,7 @@
 \@namedef{v@rpm:uringpy-app-batch/thread-over-asyncio-proto-app/process/h20}{1.17 \pm 0.19}
 \@namedef{v@rpm:uringpy-app-batch/thread-over-asyncio-proto-app/process/h30}{1.00 \pm 0.02}
 \@namedef{v@rpm:uringpy-app-batch/thread-over-asyncio-proto-app/process/h300}{0.39 \pm 0.03}
-\@namedef{v@rpm:uringpy-app-batch/thread-over-asyncio-proto-app/process/h3000}{0.26 \pm <0.01}
+\@namedef{v@rpm:uringpy-app-batch/thread-over-asyncio-proto-app/process/h3000}{0.26 \pm {<}0.01}
 \@namedef{v@rpm:uringpy-app-batch/thread-over-asyncio-proto-app/process/h5}{1.42 \pm 0.17}
 \@namedef{v@rpm:uringpy-app-batch/thread-over-asyncio-proto-app/thread/f/1}{1.62 \pm 0.04}
 \@namedef{v@rpm:uringpy-app-batch/thread-over-asyncio-proto-app/thread/f/2}{1.58 \pm 0.03}
@@ -5853,7 +6009,7 @@
 \@namedef{v@rpm:uringpy-app-batch/thread-over-uvloop-proto-app/process/g/4}{1.28 \pm 0.04}
 \@namedef{v@rpm:uringpy-app-batch/thread-over-uvloop-proto-app/process/h0}{1.27 \pm 0.01}
 \@namedef{v@rpm:uringpy-app-batch/thread-over-uvloop-proto-app/process/h10}{1.12 \pm 0.01}
-\@namedef{v@rpm:uringpy-app-batch/thread-over-uvloop-proto-app/process/h100}{0.53 \pm <0.01}
+\@namedef{v@rpm:uringpy-app-batch/thread-over-uvloop-proto-app/process/h100}{0.53 \pm {<}0.01}
 \@namedef{v@rpm:uringpy-app-batch/thread-over-uvloop-proto-app/process/h1000}{0.27 \pm 0.01}
 \@namedef{v@rpm:uringpy-app-batch/thread-over-uvloop-proto-app/process/h20}{0.94 \pm 0.02}
 \@namedef{v@rpm:uringpy-app-batch/thread-over-uvloop-proto-app/process/h30}{0.85 \pm 0.01}
@@ -5940,7 +6096,7 @@
 \@namedef{v@rpm:uringpy-app/thread-over-uvloop-proto-app/process/g/4}{0.92 \pm 0.04}
 \@namedef{v@rpm:uringpy-app/thread-over-uvloop-proto-app/process/h0}{0.88 \pm 0.03}
 \@namedef{v@rpm:uringpy-app/thread-over-uvloop-proto-app/process/h10}{0.62 \pm 0.01}
-\@namedef{v@rpm:uringpy-app/thread-over-uvloop-proto-app/process/h100}{0.45 \pm <0.01}
+\@namedef{v@rpm:uringpy-app/thread-over-uvloop-proto-app/process/h100}{0.45 \pm {<}0.01}
 \@namedef{v@rpm:uringpy-app/thread-over-uvloop-proto-app/process/h1000}{0.25 \pm 0.01}
 \@namedef{v@rpm:uringpy-app/thread-over-uvloop-proto-app/process/h20}{0.53 \pm 0.01}
 \@namedef{v@rpm:uringpy-app/thread-over-uvloop-proto-app/process/h30}{0.50 \pm 0.01}
@@ -5950,7 +6106,7 @@
 \@namedef{v@rpm:uringpy-app/thread-over-uvloop-proto-app/thread/g/1}{1.46 \pm 0.05}
 \@namedef{v@rpm:uringpy-app/thread-over-uvloop-proto-app/thread/g/2}{2.84 \pm 0.03}
 \@namedef{v@rpm:uringpy-app/thread-over-uvloop-proto-app/thread/g/4}{6.77 \pm 0.22}
-\@namedef{v@rpm:uringpy-ft-over-gil/4}{0.99 \pm <0.01}
+\@namedef{v@rpm:uringpy-ft-over-gil/4}{0.99 \pm {<}0.01}
 \@namedef{v@rpm:uringpy-over-asyncio-proto/process/f/1}{1.58 \pm 0.04}
 \@namedef{v@rpm:uringpy-over-asyncio-proto/process/f/2}{1.53 \pm 0.04}
 \@namedef{v@rpm:uringpy-over-asyncio-proto/process/f/3}{1.45 \pm 0.03}
@@ -5986,7 +6142,7 @@
 \@namedef{v@rpm:uringpy-over-uvloop-proto/process/g/1}{1.47 \pm 0.05}
 \@namedef{v@rpm:uringpy-over-uvloop-proto/process/g/2}{1.42 \pm 0.04}
 \@namedef{v@rpm:uringpy-over-uvloop-proto/process/g/3}{1.35 \pm 0.02}
-\@namedef{v@rpm:uringpy-over-uvloop-proto/process/g/4}{1.33 \pm <0.01}
+\@namedef{v@rpm:uringpy-over-uvloop-proto/process/g/4}{1.33 \pm {<}0.01}
 \@namedef{v@rpm:uringpy-over-uvloop-proto/thread/g/1}{1.49 \pm 0.04}
 \@namedef{v@rpm:uringpy-over-uvloop-proto/thread/g/2}{2.89 \pm 0.06}
 \@namedef{v@rpm:uringpy-over-uvloop-proto/thread/g/3}{5.34 \pm 0.08}
@@ -6588,6 +6744,9 @@
 \@namedef{v@tpy:py-epoll}{1.35}
 \@namedef{v@tpy:py-epoll-batch}{0.08}
 \@namedef{v@tpy:py-uring}{0.54}
+\@namedef{v@tpypm:py-epoll}{1.35 \pm 0.22}
+\@namedef{v@tpypm:py-epoll-batch}{0.08 \pm 0.20}
+\@namedef{v@tpypm:py-uring}{0.54 \pm 0.26}
 \@namedef{v@us:app/f/asyncio-app/process/1}{17.4}
 \@namedef{v@us:app/f/asyncio-app/process/2}{20.2}
 \@namedef{v@us:app/f/asyncio-app/process/4}{25.6}
@@ -7154,6 +7313,144 @@
 \@namedef{v@w:handler/g/uringpy-app/thread/4/h300}{101.65}
 \@namedef{v@w:handler/g/uringpy-app/thread/4/h3000}{994.16}
 \@namedef{v@w:handler/g/uringpy-app/thread/4/h5}{12.57}
+\@namedef{v@wacq:gilbatch/g/uringpy-app-batch/thread/1}{1}
+\@namedef{v@wacq:gilbatch/g/uringpy-app-batch/thread/2}{20}
+\@namedef{v@wacq:gilbatch/g/uringpy-app-batch/thread/4}{75}
+\@namedef{v@wacq:gilbatch/g/uringpy-app-batch1/thread/1}{0}
+\@namedef{v@wacq:gilbatch/g/uringpy-app-batch1/thread/2}{1}
+\@namedef{v@wacq:gilbatch/g/uringpy-app-batch1/thread/4}{8}
+\@namedef{v@wacq:gilbatch/g/uringpy-app-batch16/thread/1}{0}
+\@namedef{v@wacq:gilbatch/g/uringpy-app-batch16/thread/2}{3}
+\@namedef{v@wacq:gilbatch/g/uringpy-app-batch16/thread/4}{28}
+\@namedef{v@wacq:gilbatch/g/uringpy-app-batch2/thread/1}{0}
+\@namedef{v@wacq:gilbatch/g/uringpy-app-batch2/thread/2}{1}
+\@namedef{v@wacq:gilbatch/g/uringpy-app-batch2/thread/4}{11}
+\@namedef{v@wacq:gilbatch/g/uringpy-app-batch4/thread/1}{0}
+\@namedef{v@wacq:gilbatch/g/uringpy-app-batch4/thread/2}{2}
+\@namedef{v@wacq:gilbatch/g/uringpy-app-batch4/thread/4}{14}
+\@namedef{v@wacq:gilbatch/g/uringpy-app-batch64/thread/1}{0}
+\@namedef{v@wacq:gilbatch/g/uringpy-app-batch64/thread/2}{11}
+\@namedef{v@wacq:gilbatch/g/uringpy-app-batch64/thread/4}{70}
+\@namedef{v@wacq:gilbatch/g/uringpy-app-batch8/thread/1}{0}
+\@namedef{v@wacq:gilbatch/g/uringpy-app-batch8/thread/2}{2}
+\@namedef{v@wacq:gilbatch/g/uringpy-app-batch8/thread/4}{19}
+\@namedef{v@wacq:gilbatch/g/uringpy-app/thread/1}{0}
+\@namedef{v@wacq:gilbatch/g/uringpy-app/thread/2}{1}
+\@namedef{v@wacq:gilbatch/g/uringpy-app/thread/4}{8}
+\@namedef{v@wacq:handler/f/uringpy-app/thread/1}{0}
+\@namedef{v@wacq:handler/f/uringpy-app/thread/1/h100}{0}
+\@namedef{v@wacq:handler/f/uringpy-app/thread/1/h1000}{0}
+\@namedef{v@wacq:handler/f/uringpy-app/thread/1/h30}{0}
+\@namedef{v@wacq:handler/f/uringpy-app/thread/1/h300}{0}
+\@namedef{v@wacq:handler/f/uringpy-app/thread/1/h3000}{0}
+\@namedef{v@wacq:handler/f/uringpy-app/thread/2}{0}
+\@namedef{v@wacq:handler/f/uringpy-app/thread/2/h100}{0}
+\@namedef{v@wacq:handler/f/uringpy-app/thread/2/h1000}{0}
+\@namedef{v@wacq:handler/f/uringpy-app/thread/2/h30}{0}
+\@namedef{v@wacq:handler/f/uringpy-app/thread/2/h300}{0}
+\@namedef{v@wacq:handler/f/uringpy-app/thread/2/h3000}{0}
+\@namedef{v@wacq:handler/f/uringpy-app/thread/4}{0}
+\@namedef{v@wacq:handler/f/uringpy-app/thread/4/h100}{0}
+\@namedef{v@wacq:handler/f/uringpy-app/thread/4/h1000}{0}
+\@namedef{v@wacq:handler/f/uringpy-app/thread/4/h30}{0}
+\@namedef{v@wacq:handler/f/uringpy-app/thread/4/h300}{0}
+\@namedef{v@wacq:handler/f/uringpy-app/thread/4/h3000}{0}
+\@namedef{v@wacq:handler/g/uringpy-app-batch/process/1}{1}
+\@namedef{v@wacq:handler/g/uringpy-app-batch/process/1/h10}{1}
+\@namedef{v@wacq:handler/g/uringpy-app-batch/process/1/h100}{1}
+\@namedef{v@wacq:handler/g/uringpy-app-batch/process/1/h1000}{1}
+\@namedef{v@wacq:handler/g/uringpy-app-batch/process/1/h20}{1}
+\@namedef{v@wacq:handler/g/uringpy-app-batch/process/1/h30}{1}
+\@namedef{v@wacq:handler/g/uringpy-app-batch/process/1/h300}{1}
+\@namedef{v@wacq:handler/g/uringpy-app-batch/process/1/h3000}{1}
+\@namedef{v@wacq:handler/g/uringpy-app-batch/process/1/h5}{1}
+\@namedef{v@wacq:handler/g/uringpy-app-batch/process/2}{1}
+\@namedef{v@wacq:handler/g/uringpy-app-batch/process/2/h100}{1}
+\@namedef{v@wacq:handler/g/uringpy-app-batch/process/2/h1000}{1}
+\@namedef{v@wacq:handler/g/uringpy-app-batch/process/2/h30}{1}
+\@namedef{v@wacq:handler/g/uringpy-app-batch/process/2/h300}{1}
+\@namedef{v@wacq:handler/g/uringpy-app-batch/process/2/h3000}{1}
+\@namedef{v@wacq:handler/g/uringpy-app-batch/process/4}{1}
+\@namedef{v@wacq:handler/g/uringpy-app-batch/process/4/h10}{1}
+\@namedef{v@wacq:handler/g/uringpy-app-batch/process/4/h100}{1}
+\@namedef{v@wacq:handler/g/uringpy-app-batch/process/4/h1000}{1}
+\@namedef{v@wacq:handler/g/uringpy-app-batch/process/4/h20}{1}
+\@namedef{v@wacq:handler/g/uringpy-app-batch/process/4/h30}{1}
+\@namedef{v@wacq:handler/g/uringpy-app-batch/process/4/h300}{1}
+\@namedef{v@wacq:handler/g/uringpy-app-batch/process/4/h3000}{1}
+\@namedef{v@wacq:handler/g/uringpy-app-batch/process/4/h5}{1}
+\@namedef{v@wacq:handler/g/uringpy-app-batch/thread/1}{1}
+\@namedef{v@wacq:handler/g/uringpy-app-batch/thread/1/h10}{1}
+\@namedef{v@wacq:handler/g/uringpy-app-batch/thread/1/h100}{1}
+\@namedef{v@wacq:handler/g/uringpy-app-batch/thread/1/h1000}{1}
+\@namedef{v@wacq:handler/g/uringpy-app-batch/thread/1/h20}{1}
+\@namedef{v@wacq:handler/g/uringpy-app-batch/thread/1/h30}{1}
+\@namedef{v@wacq:handler/g/uringpy-app-batch/thread/1/h300}{1}
+\@namedef{v@wacq:handler/g/uringpy-app-batch/thread/1/h3000}{1}
+\@namedef{v@wacq:handler/g/uringpy-app-batch/thread/1/h5}{1}
+\@namedef{v@wacq:handler/g/uringpy-app-batch/thread/2}{25}
+\@namedef{v@wacq:handler/g/uringpy-app-batch/thread/2/h100}{702}
+\@namedef{v@wacq:handler/g/uringpy-app-batch/thread/2/h1000}{3927}
+\@namedef{v@wacq:handler/g/uringpy-app-batch/thread/2/h30}{82}
+\@namedef{v@wacq:handler/g/uringpy-app-batch/thread/2/h300}{2756}
+\@namedef{v@wacq:handler/g/uringpy-app-batch/thread/2/h3000}{4371}
+\@namedef{v@wacq:handler/g/uringpy-app-batch/thread/4}{79}
+\@namedef{v@wacq:handler/g/uringpy-app-batch/thread/4/h10}{221}
+\@namedef{v@wacq:handler/g/uringpy-app-batch/thread/4/h100}{1741}
+\@namedef{v@wacq:handler/g/uringpy-app-batch/thread/4/h1000}{10743}
+\@namedef{v@wacq:handler/g/uringpy-app-batch/thread/4/h20}{436}
+\@namedef{v@wacq:handler/g/uringpy-app-batch/thread/4/h30}{586}
+\@namedef{v@wacq:handler/g/uringpy-app-batch/thread/4/h300}{5097}
+\@namedef{v@wacq:handler/g/uringpy-app-batch/thread/4/h3000}{14123}
+\@namedef{v@wacq:handler/g/uringpy-app-batch/thread/4/h5}{137}
+\@namedef{v@wacq:handler/g/uringpy-app/process/1}{0}
+\@namedef{v@wacq:handler/g/uringpy-app/process/1/h10}{0}
+\@namedef{v@wacq:handler/g/uringpy-app/process/1/h100}{0}
+\@namedef{v@wacq:handler/g/uringpy-app/process/1/h1000}{0}
+\@namedef{v@wacq:handler/g/uringpy-app/process/1/h20}{0}
+\@namedef{v@wacq:handler/g/uringpy-app/process/1/h30}{0}
+\@namedef{v@wacq:handler/g/uringpy-app/process/1/h300}{0}
+\@namedef{v@wacq:handler/g/uringpy-app/process/1/h3000}{0}
+\@namedef{v@wacq:handler/g/uringpy-app/process/1/h5}{0}
+\@namedef{v@wacq:handler/g/uringpy-app/process/2}{0}
+\@namedef{v@wacq:handler/g/uringpy-app/process/2/h100}{0}
+\@namedef{v@wacq:handler/g/uringpy-app/process/2/h1000}{0}
+\@namedef{v@wacq:handler/g/uringpy-app/process/2/h30}{0}
+\@namedef{v@wacq:handler/g/uringpy-app/process/2/h300}{0}
+\@namedef{v@wacq:handler/g/uringpy-app/process/2/h3000}{0}
+\@namedef{v@wacq:handler/g/uringpy-app/process/4}{0}
+\@namedef{v@wacq:handler/g/uringpy-app/process/4/h10}{0}
+\@namedef{v@wacq:handler/g/uringpy-app/process/4/h100}{0}
+\@namedef{v@wacq:handler/g/uringpy-app/process/4/h1000}{0}
+\@namedef{v@wacq:handler/g/uringpy-app/process/4/h20}{0}
+\@namedef{v@wacq:handler/g/uringpy-app/process/4/h30}{0}
+\@namedef{v@wacq:handler/g/uringpy-app/process/4/h300}{0}
+\@namedef{v@wacq:handler/g/uringpy-app/process/4/h3000}{0}
+\@namedef{v@wacq:handler/g/uringpy-app/process/4/h5}{0}
+\@namedef{v@wacq:handler/g/uringpy-app/thread/1}{0}
+\@namedef{v@wacq:handler/g/uringpy-app/thread/1/h10}{0}
+\@namedef{v@wacq:handler/g/uringpy-app/thread/1/h100}{0}
+\@namedef{v@wacq:handler/g/uringpy-app/thread/1/h1000}{0}
+\@namedef{v@wacq:handler/g/uringpy-app/thread/1/h20}{0}
+\@namedef{v@wacq:handler/g/uringpy-app/thread/1/h30}{0}
+\@namedef{v@wacq:handler/g/uringpy-app/thread/1/h300}{0}
+\@namedef{v@wacq:handler/g/uringpy-app/thread/1/h3000}{0}
+\@namedef{v@wacq:handler/g/uringpy-app/thread/1/h5}{0}
+\@namedef{v@wacq:handler/g/uringpy-app/thread/2}{1}
+\@namedef{v@wacq:handler/g/uringpy-app/thread/2/h100}{9}
+\@namedef{v@wacq:handler/g/uringpy-app/thread/2/h1000}{99}
+\@namedef{v@wacq:handler/g/uringpy-app/thread/2/h30}{2}
+\@namedef{v@wacq:handler/g/uringpy-app/thread/2/h300}{29}
+\@namedef{v@wacq:handler/g/uringpy-app/thread/2/h3000}{345}
+\@namedef{v@wacq:handler/g/uringpy-app/thread/4}{8}
+\@namedef{v@wacq:handler/g/uringpy-app/thread/4/h10}{17}
+\@namedef{v@wacq:handler/g/uringpy-app/thread/4/h100}{42}
+\@namedef{v@wacq:handler/g/uringpy-app/thread/4/h1000}{357}
+\@namedef{v@wacq:handler/g/uringpy-app/thread/4/h20}{23}
+\@namedef{v@wacq:handler/g/uringpy-app/thread/4/h30}{26}
+\@namedef{v@wacq:handler/g/uringpy-app/thread/4/h300}{102}
+\@namedef{v@wacq:handler/g/uringpy-app/thread/4/h3000}{994}
+\@namedef{v@wacq:handler/g/uringpy-app/thread/4/h5}{13}
 \@namedef{v@x:app/f/asyncio-app/process/1}{57.4}
 \@namedef{v@x:app/f/asyncio-app/process/2}{98.8}
 \@namedef{v@x:app/f/asyncio-app/process/4}{156.1}
@@ -7999,7 +8296,7 @@
 \@namedef{v@xpm:scaling/g/uvloop/thread/3}{52.7 \pm 0.7}
 \@namedef{v@xpm:scaling/g/uvloop/thread/4}{42.8 \pm 0.5}
 \@namedef{v@xpm:size/g/asyncio-proto/process/4/s1024}{227.4 \pm 1.6}
-\@namedef{v@xpm:size/g/asyncio-proto/process/4/s1048576}{1.87 \pm <0.01}
+\@namedef{v@xpm:size/g/asyncio-proto/process/4/s1048576}{1.87 \pm {<}0.01}
 \@namedef{v@xpm:size/g/asyncio-proto/process/4/s16384}{118.8 \pm 1.0}
 \@namedef{v@xpm:size/g/asyncio-proto/process/4/s262144}{7.50 \pm 0.03}
 \@namedef{v@xpm:size/g/asyncio-proto/process/4/s64}{231.8 \pm 1.2}

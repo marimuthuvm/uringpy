@@ -174,6 +174,17 @@ def test_parse_proc_switches():
     assert bm.parse_proc_switches("[proc] cpu_ns=5\n") == (None, None)
 
 
+def test_parse_proc_gil_switches_and_summary_column():
+    log = ("[proc] cpu_ns=5 nvcsw=10 nivcsw=3 gil_switches=700\n[worker 0] requests=4\n"
+           "[proc] cpu_ns=7 nvcsw=32 nivcsw=1 gil_switches=300\n")
+    assert bm.parse_proc_gil_switches(log) == 1000
+    assert bm.parse_proc_switches(log) == (42, 4)   # older parsers are unaffected
+    assert bm.parse_proc_gil_switches("[proc] cpu_ns=5 nvcsw=1 nivcsw=1\n") is None
+    rows = [_row("uringpy-app", 4, 100.0, srv_requests=2000, srv_gil_switches=500)]
+    line = [l for l in bm.summarize(rows).splitlines() if l.startswith("| uringpy-app")][0]
+    assert "| 0.250 |" in line
+
+
 def test_summarize_handler_columns_and_old_results():
     new = [_row("uringpy-app", 1, 100.0, handler_work=300, srv_requests=1000,
                 srv_handler_calls=1000, srv_gil_hold_ns=5_000_000,

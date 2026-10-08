@@ -89,10 +89,10 @@ class Cell:
 
     def avg(self, key):
         vals = [v for v in (_num(r, key) for r in self.rows) if not math.isnan(v)]
-        return sum(vals) / len(vals) if vals else float("nan")
+        return math.fsum(vals) / len(vals) if vals else float("nan")
 
     def total(self, key):
-        return sum(v for v in (_num(r, key) for r in self.rows) if not math.isnan(v))
+        return math.fsum(v for v in (_num(r, key) for r in self.rows) if not math.isnan(v))
 
     @property
     def busy_cores(self):
@@ -116,8 +116,8 @@ class Cell:
     def _timed(self, key):
         """Per handler call, over the runs in which GIL timing was switched on."""
         rows = [r for r in self.rows if _num(r, "srv_gil_hold_ns") > 0]
-        calls = sum(_num(r, "srv_handler_calls") for r in rows)
-        return sum(_num(r, key) for r in rows) / calls / 1e3 if calls else float("nan")
+        calls = math.fsum(_num(r, "srv_handler_calls") for r in rows)
+        return math.fsum(_num(r, key) for r in rows) / calls / 1e3 if calls else float("nan")
 
     @property
     def gil_hold_us(self):
@@ -166,8 +166,8 @@ class Cell:
         both from server counters covering the server's whole life."""
         rows = [r for r in self.rows if not math.isnan(_num(r, "srv_requests"))
                 and not math.isnan(_num(r, "srv_nvcsw"))]
-        req = sum(_num(r, "srv_requests") for r in rows)
-        sw = sum(_num(r, "srv_nvcsw") for r in rows)
+        req = math.fsum(_num(r, "srv_requests") for r in rows)
+        sw = math.fsum(_num(r, "srv_nvcsw") for r in rows)
         return sw / req if req and rows else float("nan")
 
     @property
@@ -180,13 +180,33 @@ class Cell:
                 and not math.isnan(_num(r, "rps"))]
         if not rows or nan(self.life_s):
             return float("nan")
-        req = sum(_num(r, "rps") for r in rows) * self.life_s
-        return sum(_num(r, "srv_nvcsw") for r in rows) / req if req else float("nan")
+        req = math.fsum(_num(r, "rps") for r in rows) * self.life_s
+        return math.fsum(_num(r, "srv_nvcsw") for r in rows) / req if req else float("nan")
 
     @property
     def csw(self):
         direct = self.csw_per_request
         return self.csw_per_request_est if nan(direct) else direct
+
+    @property
+    def gil_switches(self):
+        """GIL hand-offs per request, as the interpreter counts them: changes of
+        the GIL's owner (uringpy._gilstat), summed over the server's processes
+        and its whole life. Engines that do not count their requests are divided
+        by wrk's count scaled to the server's life, as for csw. NaN for runs
+        made before the counter existed."""
+        rows = [r for r in self.rows if not math.isnan(_num(r, "srv_gil_switches"))]
+        if not rows:
+            return float("nan")
+        counted = [r for r in rows if not math.isnan(_num(r, "srv_requests"))]
+        if len(counted) == len(rows):
+            req = math.fsum(_num(r, "srv_requests") for r in rows)
+        elif nan(self.life_s):
+            return float("nan")
+        else:
+            req = math.fsum(_num(r, "rps") for r in rows) * self.life_s
+        sw = math.fsum(_num(r, "srv_gil_switches") for r in rows)
+        return sw / req if req else float("nan")
 
     @property
     def gil_util(self):
@@ -368,7 +388,8 @@ def dump(data):
                    + (f" excluded={f['excluded']}" if f.get("excluded") else ""))
     out.append("")
     out.append("experiment gil engine mode W size batch work | n mean hw cv% | p50 p99 | "
-               "srvCPU% busy_cores per_core cliCPU% | sys/req compl/enter | hold_us wait_us | flags")
+               "srvCPU% busy_cores per_core cliCPU% | sys/req compl/enter | hold_us wait_us | "
+               "ghat csw gsw | flags")
     for key in sorted(data.cells, key=lambda k: (k[0], k[1], k[2], k[3], k[5], k[6], k[7], k[4])):
         c = data.cells[key]
         flags = []
@@ -385,6 +406,7 @@ def dump(data):
                    f"{c.avg('server_cpu_pct'):.1f} {c.busy_cores:.2f} {c.per_core:,.0f} "
                    f"{c.avg('client_cpu_pct'):.1f} | {c.syscalls_per_request:.3f} "
                    f"{c.completions_per_enter:.1f} | {c.gil_hold_us:.2f} {c.gil_wait_us:.2f} | "
+                   f"{c.handoffs:.3f} {c.csw:.3f} {c.gil_switches:.3f} | "
                    + "; ".join(flags))
     return "\n".join(out) + "\n"
 
@@ -495,7 +517,7 @@ def tab_factorial(d):
                 " & ".join(line.split(" & ")[:7] + line.split(" & ")[8:]) for line in body]
     header = ["Engine & Loop & $N{=}1$ & $N{=}2$ & $N{=}4$ & $S_4$ "
               "& $S_4^{\\mathrm{proc}}$ " + ("& $S_4^{\\mathrm{ft}}$ " if free else "")
-              + "& sys & $g$ & c.sw. & $C_4$ & p99 \\\\"]
+              + "& sys & $\\hat{g}$ & c.sw. & $C_4$ & p99 \\\\"]
     return table(
         "table*",
         "The $2{\\times}2$ design and two controls (worker threads, GIL build, 13-byte body): "
@@ -504,13 +526,14 @@ def tab_factorial(d):
         "processes $S_4^{\\mathrm{proc}}$"
         + (" and of worker threads on the free-threaded build $S_4^{\\mathrm{ft}}$" if free else "")
         + "; and, at four worker threads, per request: measured "
-        "system calls (sys), GIL releases ($g$, the upper limit on hand-offs) and voluntary "
+        "system calls (sys), counted GIL releases ($\\hat{g}$, an upper limit on hand-offs) and voluntary "
         "context switches (c.sw.); busy "
         "server cores $C_4$; and 99th-percentile latency in ms.",
         "tab:factorial", "@{}llrrrrrrrrrr" + ("r" if free else "") + "@{}", header, body,
         colsep="3pt",
-        note=" ".join(["The upper four rows are the design; the lower rows are controls that "
-                       "differ from one cell in one respect."] + notes) if notes else None)
+        note=" ".join(["The upper four rows are the design; the lower rows are controls, each "
+                       "aimed at one respect in which two cells differ (see the text)."]
+                      + notes) if notes else None)
 
 
 def _handoffs(c):
@@ -636,12 +659,12 @@ def tab_app(d):
         "table*",
         "Application-handler workload: every request calls a Python handler. Throughput in "
         f"thousands of requests per second (mean $\\pm$ 95\\% half-width, {run_count(used)}), "
-        "scaling, and at four workers: GIL acquisitions per request ($g$) where the reactor "
+        "scaling, and at four workers: GIL acquisitions per request ($\\hat{g}$) where the reactor "
         "counts them and the workers share one GIL, voluntary context switches per request "
         "(c.sw.), busy server cores and 99th-percentile latency.",
         "tab:app", "@{}lllrrrrrrrrr@{}",
         ["Build & Engine & Workers & $N{=}1$ & $N{=}2$ & $N{=}4$ & $S_2$ & $S_4$ "
-         "& $g$ & c.sw. & $C_4$ & p99 (ms) \\\\"], body, colsep="3pt",
+         "& $\\hat{g}$ & c.sw. & $C_4$ & p99 (ms) \\\\"], body, colsep="3pt",
         note=" ".join(notes) or None)
 
 
@@ -676,12 +699,12 @@ def tab_gilbatch(d):
         "threads, GIL build). Cap: the largest number of requests handled under one "
         "acquisition; ``---'' is the reactor that takes the GIL for each request without "
         "the batching code, ``none'' takes it once for all requests found in a pass. "
-        "Measured at four workers: GIL acquisitions per request $g$, hold time $t_{p,4}$ and "
+        "Measured at four workers: GIL acquisitions per request $\\hat{g}$, hold time $t_{p,4}$ and "
         "wait time $w_4$ per request in $\\mu$s, GIL utilisation "
         "$U_4=\\bar{x}_4\\,t_{p,4}$, voluntary context switches per request (c.sw.). Throughput in "
         f"thousands of requests per second (mean $\\pm$ 95\\% half-width, {run_count(used)}).",
         "tab:gilbatch", "@{}rrrrrrrrrr@{}",
-        ["Cap & $g$ & $\\bar{x}_1$ & $\\bar{x}_4$ & $S_2$ & $S_4$ & $t_{p,4}$ & $w_4$ "
+        ["Cap & $\\hat{g}$ & $\\bar{x}_1$ & $\\bar{x}_4$ & $S_2$ & $S_4$ & $t_{p,4}$ & $w_4$ "
          "& $U_4$ & c.sw. \\\\"], body, colsep="4pt",
         note=("$^\\dagger$ A configuration in this ratio had a coefficient of variation above "
               "5\\%." if dagger else None))
@@ -706,8 +729,10 @@ def tab_load(d):
             used += [c1, c4]
             body.append(" & ".join([
                 code(engine) if n == 0 else "", str(conn),
-                fnum(c1.mean / 1e3 if c1 and c1.n else None, 1),
-                fnum(c4.mean / 1e3 if c4 and c4.n else None, 1),
+                fnum(c1.mean / 1e3 if c1 and c1.n else None, 1)
+                + ("$^{\\ddagger}$" if c1 is not None and c1.errors else ""),
+                fnum(c4.mean / 1e3 if c4 and c4.n else None, 1)
+                + ("$^{\\ddagger}$" if c4 is not None and c4.errors else ""),
                 ratio_pm(c4, c1) + _flagged(c4, c1),
                 DASH if c4 is None else "0" if c4.handoffs == 0 else fnum(c4.handoffs, 2),
                 fnum(c4.csw if c4 else None, 2)]) + " \\\\")
@@ -725,6 +750,12 @@ def tab_load(d):
         notes.append(f"{left_out} runs with 1600 connections are not shown: that number "
                      "exceeded the server's limit on open files "
                      "(Section~\\ref{sec:threats}).")
+    if any("ddagger" in line for line in body):
+        worst = max((_num(r, "socket_errors") / _num(r, "requests")
+                     for c in used if c is not None for r in c.rows
+                     if _num(r, "socket_errors") > 0 and _num(r, "requests") > 0), default=0.0)
+        notes.append("$^{\\ddagger}$ Every run of this configuration reported socket errors, "
+                     f"for at most {100 * worst:.3f}\\% of its requests.")
     if dagger:
         notes.append("$^\\dagger$ A configuration in this ratio had a coefficient of variation "
                      "above 5\\%.")
@@ -733,9 +764,10 @@ def tab_load(d):
         "Load varied: keep-alive connections opened by the client (worker threads, GIL "
         "build). Mean throughput in thousands of requests per second at one and four workers "
         f"({run_count(used)}), scaling with its 95\\% half-width, and at four workers per "
-        "request: GIL hand-off opportunities $g$ and voluntary context switches (c.sw.).",
+        "request: counted GIL releases or acquisitions $\\hat{g}$ and voluntary context switches "
+        "(c.sw.).",
         "tab:load", "@{}lrrrrrr@{}",
-        ["Engine & Conn. & $\\bar{x}_1$ & $\\bar{x}_4$ & $S_4$ & $g$ & c.sw. \\\\"], body,
+        ["Engine & Conn. & $\\bar{x}_1$ & $\\bar{x}_4$ & $S_4$ & $\\hat{g}$ & c.sw. \\\\"], body,
         colsep="2.5pt", note=" ".join(notes) or None)
 
 
@@ -812,7 +844,8 @@ def tab_size(d):
         # wrk reports MiB/s read by the client; convert to Gbit/s.
         gbit = u.avg("transfer_mb_s") * 1.048576 * 8 / 1000 if u else float("nan")
         body.append(" & ".join([
-            _size_label(size), k_pm(u), k_pm(a), fnum(gbit, 1),
+            _size_label(size), k_pm(u) + (ERR if u and u.errors else ""),
+            k_pm(a) + (ERR if a and a.errors else ""), fnum(gbit, 1),
             fnum(u.busy_cores if u else None, 2), fnum(u.syscalls_per_request if u else None, 2)])
             + " \\\\")
     return table(
@@ -822,7 +855,21 @@ def tab_size(d):
         "\\code{uringpy} also the data rate received by the client, busy server cores and "
         "system calls per request.",
         "tab:size", "@{}rrrrrr@{}",
-        ["Body & \\code{uringpy} & " + code(base) + " & Gbit/s & $C$ & sys/req \\\\"], body)
+        ["Body & \\code{uringpy} & " + code(base) + " & Gbit/s & $C$ & sys/req \\\\"], body,
+        note=("$^{\\ddagger}$ Runs of this configuration reported socket errors ("
+              + (f"at most {meta_sockerr_max(used):.2f}\\%" if meta_sockerr_max(used) >= 0.005
+                 else "less than 0.01\\%") + " of a run's requests)."
+              if any("ddagger" in line for line in body) else None))
+
+
+ERR = "$^{\\ddagger}$"
+
+
+def meta_sockerr_max(cells):
+    """Largest share of a run's requests that hit a socket error, in percent."""
+    return 100 * max((_num(r, "socket_errors") / _num(r, "requests")
+                      for c in cells if c is not None for r in c.rows
+                      if _num(r, "socket_errors") > 0 and _num(r, "requests") > 0), default=0.0)
 
 
 def _flagged(*cells):
@@ -868,9 +915,13 @@ def tab_handler(d):
                 acq = 1.0  # one acquisition per call by construction (older runs lack the counter)
             flags = [_flagged(t2, t1), _flagged(t4, t1), _flagged(p4, p1), _flagged(f4, f1)]
             dagger = dagger or any(flags)
+            # socket errors in the numerator's runs (the one-worker cell carries its own mark)
+            flags = [flag + (ERR if cell is not None and cell.errors else "")
+                     for flag, cell in zip(flags, (t2, t4, p4, f4))]
             body.append(" & ".join([
                 "request" if engine == "uringpy-app" else "batch",
-                str(work), k_pm(t1), fnum(tp, 2), fnum(f, 2), fnum(bound, 2),
+                str(work), k_pm(t1) + (ERR if t1 is not None and t1.errors else ""),
+                fnum(tp, 2), fnum(f, 2), fnum(bound, 2),
                 ratio_pm(t2, t1) + flags[0], ratio_pm(t4, t1) + flags[1],
                 ratio_pm(p4, p1) + flags[2], ratio_pm(f4, f1) + flags[3],
                 fnum(tp4, 2), fnum(t4.gil_wait_us if t4 else None, 2),
@@ -887,18 +938,21 @@ def tab_handler(d):
         "of~\\eqref{eq:bound}; measured scaling of worker threads ($S_2$, $S_4$), of worker "
         "processes ($S_4^{\\mathrm{proc}}$) and of threads on the free-threaded build "
         "($S_4^{\\mathrm{ft}}$); and, at four worker threads, GIL hold time $t_{p,4}$ and wait "
-        "time $w_4$ per request, GIL acquisitions per request $g$, and GIL utilisation "
+        "time $w_4$ per request, GIL acquisitions per request $\\hat{g}$, and GIL utilisation "
         "$U_4 = \\bar{x}_4\\,t_{p,4}$.",
         "tab:handler", "@{}lrrrrrrrrrrrrr@{}",
         ["GIL per & Work & $\\bar{x}_1$ & $t_p$ ($\\mu$s) & $f$ & bound & $S_2$ & $S_4$ "
          "& $S_4^{\\mathrm{proc}}$ & $S_4^{\\mathrm{ft}}$ & $t_{p,4}$ & $w_4$ "
-         "& $g$ & $U_4$ \\\\"], body, colsep="2pt",
+         "& $\\hat{g}$ & $U_4$ \\\\"], body, colsep="2pt",
         note=("$t_{p,4}$ and $w_4$ in $\\mu$s. n/a: with "
               "batching and long handlers the interpreter's switch interval interrupts a "
               "batch, so the recorded hold includes time waiting to resume."
               + (" The rows without $S_2$ were measured in the supplementary run, at one and "
                  "four workers." if any(line.split(" & ")[6:7] == [DASH] for line in body)
                  else "")
+              + (" $^{\\ddagger}$ Runs behind this cell reported socket errors (at most "
+                 f"{meta_sockerr_max(used):.2f}\\% of a run's requests)."
+                 if any("ddagger" in line for line in body) else "")
               + (" $^\\dagger$ A configuration in this ratio had a coefficient of variation "
                  "above 5\\%." if dagger else "")))
 
@@ -1024,7 +1078,8 @@ def _handoff_points(d):
         "loops": series([("factorial", e, code(e))
                          for e in ("py-epoll", "py-epoll-batch", "py-uring")]),
         "uring": uring,
-        "epoll": series([("app", "c-epoll-app"), ("app", "c-epoll-app-batch")]),
+        "epoll": series([("app", "c-epoll-app", "per request"),
+                         ("app", "c-epoll-app-batch", "per batch")]),
         "others": series([("scaling", e) for e in ("asyncio", "asyncio-proto", "uvloop",
                                                    "uvloop-proto")]
                          + [("app", e) for e in ("asyncio-app", "asyncio-proto-app",
@@ -1090,11 +1145,11 @@ def fig_handoffs(d):
                   "C loop, no Python", errors=True)
     # legend in two columns: short entries left, long entries right
     body += _plot("sB, mark=square*, mark options={fill=sB}", uring,
-                  "C reactor + handler, \\code{io\\_uring}", errors=True)
+                  "reactor + handler, \\code{io\\_uring}", errors=True)
     body += _plot("only marks, sA, mark=*, mark options={fill=sA}", loops,
                   "loop in Python", errors=True)
     body += _plot("only marks, sC, mark=triangle*, mark options={fill=sC}, mark size=2.4pt",
-                  epoll, "C reactor + handler, \\code{epoll}", errors=True)
+                  epoll, "reactor + handler, \\code{epoll}", errors=True)
     body += _plot("only marks, ink, mark=diamond, mark size=2.4pt", others,
                   "\\code{asyncio}, \\code{uvloop}", errors=True)
     if all(c is not None and c.n for c in ceiling):
@@ -1102,10 +1157,21 @@ def fig_handoffs(d):
         body += [f"\\addplot[ink, densely dashed, line width=0.5pt] coordinates "
                  f"{{({lo:g},{top_s:.4g}) ({hi:g},{top_s:.4g})}};",
                  "\\addlegendentry{C loop as processes}"]
-    body += _plot("only marks, ink, mark=o", held, None, errors=True)
+    body += _plot("only marks, ink, mark=o", held, "Python loop, GIL held",
+                  errors=True)
+    # The two interventions that move a loop from one end to the other.
+    by_label = {p[3]: p for p in loops + epoll if p[3]}
+    for src, dst in ((code("py-epoll"), code("py-epoll-batch")), ("per request", "per batch")):
+        if src in by_label and dst in by_label:
+            a, b = by_label[src], by_label[dst]
+            body.append("\\draw[-{Stealth[length=1.6mm]}, black!45, line width=0.4pt, "
+                        "shorten <=2.5pt, shorten >=2.5pt] "
+                        f"(axis cs:{a[0]:.5g},{a[1]:.5g}) -- (axis cs:{b[0]:.5g},{b[1]:.5g});")
     body += _plot("only marks, ink, mark=diamond*, mark options={fill=ink}, mark size=2.4pt",
                   uring_loops, "\\code{asyncio} loop on \\code{io\\_uring}", errors=True)
     for p in loops + held + uring_loops:
+        if p[3] == code("py-uring-held"):
+            continue                    # named in the legend
         angle, dist = pins.get(p[3], (90, "4mm"))
         body.append(f"\\node[inner sep=0pt, pin={{[font=\\scriptsize, inner sep=1pt, "
                     f"pin distance={dist}, pin edge={{black!50, thin}}]{angle}:{{{p[3]}}}}}] "
@@ -1120,10 +1186,10 @@ def fig_handoffs(d):
         "Tables~\\ref{tab:factorial}, \\ref{tab:scaling}, \\ref{tab:app} "
         "and~\\ref{tab:gilbatch}, an engine that appears in two of them once. The connected "
         "points are one reactor with the number of requests served per GIL acquisition "
-        "varied. For "
-        "\\code{asyncio} and \\code{uvloop} the request count is the client's. "
-        "\\code{py-uring-held} switches rarely but holds the GIL while the kernel performs "
-        "the sends.",
+        "varied. The arrows mark two interventions: the Python loop on \\code{epoll} with "
+        "its releases batched, and the \\code{epoll} reactor taking the GIL per batch "
+        "instead of per request. For "
+        "\\code{asyncio} and \\code{uvloop} the request count is the client's.",
         "fig:handoffs", body)
 
 
@@ -1192,19 +1258,27 @@ def fig_handler(d):
         return [p[:3] for p in (_scaling_point(c(engine, mode, 1, w, gil), c(engine, mode, 4, w, gil),
                                                tp[w]) for w in works) if p]
 
-    def absolute(engine, mode):
-        out = []
-        for w in works:
-            cell = c(engine, mode, 4, w)
-            if cell is not None and cell.n:
-                out.append((tp[w], cell.mean / 1e3, cell.hw / 1e3))
-        return out
-
+    # Thread scaling cannot exceed what the lock allows (1/f), nor what the
+    # same workers reach as processes on this machine.
     bound = []
     for w in works:
         t1 = c("uringpy-app", "thread", 1, w)
+        p1, p4 = c("uringpy-app", "process", 1, w), c("uringpy-app", "process", 4, w)
         f = tp[w] * 1e-6 * t1.mean
-        bound.append((tp[w], min(4.0, 1.0 / f)))
+        ceiling = p4.mean / p1.mean if p1 is not None and p4 is not None and p1.n and p4.n else 4.0
+        bound.append((tp[w], min(ceiling, 1.0 / f)))
+
+    def relative(engine, mode):
+        """Throughput at four workers relative to the processes of the reactor
+        with GIL batching, the configuration the text compares the threads with."""
+        out = []
+        for w in works:
+            cell, ref = c(engine, mode, 4, w), c("uringpy-app-batch", "process", 4, w)
+            if cell is not None and ref is not None and cell.n and ref.n:
+                r, h = ratio_ci95(cell.rps, ref.rps)
+                out.append((tp[w], r, h))
+        return out
+
     xmin = 10 ** math.floor(math.log10(min(tp.values())) - 0.05)
     xmax = 10 ** math.ceil(math.log10(max(tp.values())) + 0.05)
     common = (f"{AXIS}, width=0.46\\textwidth, height=60mm, xmode=log, xmin={xmin:g}, "
@@ -1213,7 +1287,7 @@ def fig_handler(d):
          f"ylabel={{scaling $S_4$}}, {LEGEND_BELOW_1}]",
          "\\addplot[ink, line width=0.6pt] coordinates {"
          + " ".join(f"({x:.5g},{y:.4g})" for x, y in bound) + "};",
-         "\\addlegendentry{bound $\\min(4, 1/f)$}"]
+         "\\addlegendentry{$\\min(S_4^{\\mathrm{proc}}, 1/f)$}"]
     a += _plot("sA, mark=*, mark options={fill=sA}", scaling("uringpy-app", "thread"),
                "threads, GIL per request", errors=True)
     a += _plot("sB, mark=square*, mark options={fill=sB}", scaling("uringpy-app-batch", "thread"),
@@ -1222,28 +1296,33 @@ def fig_handler(d):
                scaling("uringpy-app", "process"), "processes", errors=True)
     a += _plot("ink, densely dotted, mark=diamond, mark options={solid}, mark size=2.4pt",
                scaling("uringpy-app", "thread", "off"), "threads, free-threaded", errors=True)
-    b = ["\\nextgroupplot[title={\\footnotesize (b) throughput at four workers}, ymode=log, "
-         f"ylabel={{thousand requests per second}}, {LEGEND_BELOW_1}]"]
-    b += _plot("sA, mark=*, mark options={fill=sA}", absolute("uringpy-app", "thread"),
-               "\\code{uringpy} threads, GIL per request")
-    b += _plot("sB, mark=square*, mark options={fill=sB}", absolute("uringpy-app-batch", "thread"),
-               "\\code{uringpy} threads, GIL per batch")
-    b += _plot("sA, densely dashed, mark=o, mark options={solid}",
-               absolute("uringpy-app", "process"), "\\code{uringpy} processes")
+    b = ["\\nextgroupplot[title={\\footnotesize (b) throughput at four workers, relative to "
+         "\\code{uringpy} processes}, ymin=0, ymax=1.45, "
+         f"ylabel={{ratio to \\code{{uringpy}} processes}}, {LEGEND_BELOW_1}]",
+         f"\\addplot[forget plot, black!35, line width=0.5pt] coordinates {{({xmin:g},1) ({xmax:g},1)}};"]
+    b += _plot("sA, mark=*, mark options={fill=sA}", relative("uringpy-app", "thread"),
+               "\\code{uringpy} threads, GIL per request", errors=True)
+    b += _plot("sB, mark=square*, mark options={fill=sB}", relative("uringpy-app-batch", "thread"),
+               "\\code{uringpy} threads, GIL per batch", errors=True)
     b += _plot("sC, densely dashed, mark=triangle, mark options={solid}, mark size=2.4pt",
-               absolute("uvloop-proto-app", "process"), "\\code{uvloop} processes (Protocol API)")
+               relative("uvloop-proto-app", "process"), "\\code{uvloop} processes (Protocol API)",
+               errors=True)
     b += _plot("ink, densely dashed, mark=diamond, mark options={solid}, mark size=2.4pt",
-               absolute("asyncio-proto-app", "process"), "\\code{asyncio} processes (Protocol API)")
+               relative("asyncio-proto-app", "process"),
+               "\\code{asyncio} processes (Protocol API)", errors=True)
     body = ["\\begin{tikzpicture}",
             f"\\begin{{groupplot}}[group style={{group size=2 by 1, horizontal sep=16mm}}, {common}]",
             *a, *b, "\\end{groupplot}", "\\end{tikzpicture}"]
     return _figure(
         "figure*",
         "Handler cost swept (GIL build unless stated). The horizontal axis is the measured "
-        "time one request holds the GIL on one worker. (a)~Scaling at four workers against "
-        "the bound of~\\eqref{eq:bound}; bars are 95\\% half-widths. (b)~Throughput at four "
-        "workers: worker threads of one interpreter (solid) against one process per worker "
-        "(dashed), for \\code{uringpy} and for the two baselines through the Protocol API.",
+        "time one request holds the GIL on one worker. (a)~Scaling at four workers. The line "
+        "is the smaller of the bound $1/f$ of~\\eqref{eq:bound} and the scaling the same "
+        "workers reach as processes. The free-threaded series has no points for the three "
+        "handler sizes added in the supplementary run. (b)~Throughput at four workers "
+        "relative to \\code{uringpy} processes with GIL batching (grey line): worker threads of one interpreter "
+        "(solid) and the two baselines run as one process per worker through the Protocol "
+        "API (dashed). Bars are 95\\% half-widths.",
         "fig:handler", body)
 
 
@@ -1298,7 +1377,7 @@ def _base(key):
 
 def _math(s):
     """A table string ('140.7 $\\pm$ 1.2') for use inside math mode."""
-    return s.replace("$", "")
+    return s.replace("$<$", "{<}").replace("$", "")
 
 
 def _ratio_names():
@@ -1387,7 +1466,7 @@ def numbers(d):
         out[f"us:{name}"] = f"{w / c.mean * 1e6:.1f}"
         out[f"n:{name}"] = str(c.n)
         for q, v, fmt in (("sys", c.syscalls_per_request, ".3f"), ("ho", c.handoffs, ".3f"),
-                          ("csw", c.csw, ".3f"), ("cpe", c.completions_per_enter, ".0f"),
+                          ("csw", c.csw, ".3f"), ("gsw", c.gil_switches, ".3f"), ("cpe", c.completions_per_enter, ".0f"),
                           ("C", c.busy_cores, ".2f"), ("p50", c.avg("lat_p50_ms"), ".1f"),
                           ("p99", c.avg("lat_p99_ms"), ".1f"), ("cv", c.cv, ".1f"),
                           ("tp", c.gil_hold_us, ".2f"), ("w", c.gil_wait_us, ".2f"),
@@ -1396,6 +1475,10 @@ def numbers(d):
                 out[f"{q}:{name}"] = format(v, fmt)
         if not nan(c.gil_hold_us):
             out[f"tau:{name}"] = f"{1e6 / c.mean - c.gil_hold_us:.1f}"
+            # what the lock could pass per second if it were never idle
+            out[f"lockcap:{name}"] = f"{1e3 / c.gil_hold_us:.1f}"
+            if not nan(c.gil_wait_us) and c.handoffs:
+                out[f"wacq:{name}"] = f"{c.gil_wait_us / c.handoffs:.0f}"
         one = d.cells.get(key[:4] + (1,) + key[5:])
         if one is not None and one.n:
             if w != 1:
@@ -1450,6 +1533,7 @@ def numbers(d):
                     out[f"r:{engine}/thread-over-{base}/process/h{work}"] = \
                         _math(ratio_pm(c, p).split(" ")[0])
     out.update(_meta_numbers(d))
+    out.update(_anchor_numbers(d))
     out.update(_figure_numbers(d))
     out.update(_text_file_numbers(d))
     return out
@@ -1522,6 +1606,25 @@ def _meta_numbers(d):
         out["meta:tau-max"] = f"{max(t for _, t in taus):.1f}"
         out["meta:tau-n"] = f"{len(taus)}"
         out["meta:tau-max-work"] = f"{max(w for w, _ in taus)}"
+    # Where the bound 1/f is below what processes reach, how far above the
+    # measured scaling of the batched reactor it lies (percent).
+    gaps = []
+    for k, c in d.cells.items():
+        if k[:5] != ("handler", "on", "uringpy-app-batch", "thread", 4) or not c.n:
+            continue
+        one = d.cells.get(k[:4] + (1,) + k[5:])
+        p1 = d.cells.get(k[:3] + ("process", 1) + k[5:])
+        p4 = d.cells.get(k[:3] + ("process", 4) + k[5:])
+        if not (one and p1 and p4 and one.n and p1.n and p4.n) or nan(one.gil_hold_us):
+            continue
+        bound = 1 / (one.gil_hold_us * 1e-6 * one.mean)
+        gap = 100 * (min(4.0, bound) / (c.mean / one.mean) - 1)
+        out[f"boundgap:h{k[7]}"] = f"{gap:.0f}"
+        if bound < p4.mean / p1.mean:
+            gaps.append(gap)
+    if gaps:
+        out["meta:bound-gap-min"] = f"{min(gaps):.0f}"
+        out["meta:bound-gap-max"] = f"{max(gaps):.0f}"
     # Scaling of the six loops as threads on the free-threaded build.
     ft = []
     for engine, *_ in FACTORIAL_ROWS:
@@ -1541,8 +1644,11 @@ def _meta_numbers(d):
         b = d.get("factorial", "on", c_loop, "thread", 1)
         if a is not None and b is not None and a.n and b.n:
             extra = 1e6 / a.mean - 1e6 / b.mean
+            # half-width of a difference of two reciprocals (first order)
+            hw = 1e6 * math.sqrt((a.hw / a.mean ** 2) ** 2 + (b.hw / b.mean ** 2) ** 2)
+            out[f"tpypm:{py}"] = f"{extra:.2f} \\pm {hw:.2f}"
             out[f"tpy:{py}"] = f"{extra:.2f}"
-            out[f"fpy:{py}"] = f"{extra * a.mean / 1e6:.2f}"
+            out[f"fpy:{py}"] = f"{extra * a.mean / 1e6:.3f}"
             out[f"fpy-bound:{py}"] = f"{1e6 / (extra * a.mean):.1f}" if extra > 0 else "inf"
     # The two ways of computing context switches per request, where both apply.
     diffs = [abs(c.csw_per_request_est / c.csw_per_request - 1) for c in cells
@@ -1562,6 +1668,20 @@ def _meta_numbers(d):
     # (uringpy:<commit>, with "t" for the free-threaded build or "-loops").
     import re
     images = {(f["meta"].get("server", {}).get("image") or "") for f in d.folders}
+    # Scaling of four worker processes on the transport path and with the short
+    # handler (configurations with a coefficient of variation above 5% left out),
+    # and the busy cores of four worker processes: what this machine allows.
+    proc = []
+    busy = []
+    for k, c in d.cells.items():
+        if k[0] in ("factorial", "scaling", "app") and k[3] == "process" and k[4] == 4 and c.n:
+            one = d.cells.get(k[:4] + (1,) + k[5:])
+            if one is not None and one.n and c.cv <= 5 and one.cv <= 5:
+                proc.append(c.mean / one.mean)
+                busy.append(c.busy_cores)
+    if proc:
+        out["meta:proc-S-min"], out["meta:proc-S-max"] = f"{min(proc):.2f}", f"{max(proc):.2f}"
+        out["meta:proc-C4-min"] = f"{min(busy):.2f}"
     commits = sorted({m.group(1) for m in (re.search(r":([0-9a-f]{7})", i) for i in images) if m})
     drivers = sorted({(f["meta"].get("client", {}).get("git_commit") or "?")[:7]
                       for f in d.folders})
@@ -1576,6 +1696,41 @@ def _meta_numbers(d):
         out["meta:first-day"], out["meta:last-day"] = days[0], days[-1]
     out["meta:folders"] = f"{len(d.folders)}"
     return out
+
+
+def _anchor_folders(results_dir):
+    """Names of the loops folders under superseded/ that _anchor_numbers reads."""
+    sup = os.path.join(results_dir or "", "superseded")
+    if not os.path.isdir(sup):
+        return []
+    return sorted(f["name"] for f in load(sup)[1]
+                  if f["experiment"] == "loops"
+                  and (f["meta"].get("params") or {}).get("docker_opts"))
+
+
+def _anchor_numbers(d):
+    """Configurations of the scaling experiment that were measured again, hours
+    later, in the loops experiment of the supplementary run. That experiment is
+    kept under superseded/ because the loop it was run for failed, but its
+    asyncio and uvloop runs repeat main-run configurations and show how far two
+    sessions agree."""
+    sup = os.path.join(d.results_dir or "", "superseded")
+    if not os.path.isdir(sup):
+        return {}
+    later, folders = load(sup)
+    limits = {f["experiment"] for f in folders
+              if ((f["meta"].get("params") or {}).get("docker_opts"))}
+    ratios = []
+    for k, c in later.items():
+        if k[0] != "loops" or "loops" not in limits or not c.n or k[1] != "on":
+            continue
+        ref = d.cells.get(("scaling",) + k[1:])
+        if ref is not None and ref.n:
+            ratios.append(c.mean / ref.mean)
+    if not ratios:
+        return {}
+    return {"meta:anchor-n": f"{len(ratios)}", "meta:anchor-min": f"{min(ratios):.2f}",
+            "meta:anchor-max": f"{max(ratios):.2f}"}
 
 
 def _text_file_numbers(d):
@@ -1744,12 +1899,12 @@ def headline_md(d):
             "reactor.")
     limits = []
     k = ("tp:handler/g/uringpy-app-batch/thread/1", "tp:handler/g/uringpy-app-batch/thread/1/h30",
-         "rpm:uringpy-app-batch/thread-over-uringpy-app/process/h30")
+         "rpm:thread-over-process:handler/g/uringpy-app-batch/thread/4/h30")
     if has(*k):
         limits.append(
             f"  - **Handler length.** The handler above holds the GIL for {v[k[0]]} µs per request. "
             f"With one that holds it for {v[k[1]]} µs, batched threads deliver "
-            f"{v[k[2]].split(' ')[0]} of what processes do, and less with longer ones. No design "
+            f"{v[k[2]].split(' ')[0]} of what its processes do, and less with longer ones. No design "
             "recovers thread scaling once the lock itself is busy.")
     k = ("S:load/g/uringpy-app-batch/thread/4/c64", "S:load/g/uringpy-app-batch/thread/4")
     if has(*k):
@@ -1770,6 +1925,11 @@ def headline_md(d):
                       "at four workers than the Python loop on `io_uring`.")
     if limits:
         notes += ["- **Limits, measured.**"] + limits
+    if notes:
+        notes.append("- **What was not observed.** GIL hand-offs are inferred from counters (releases, "
+                     "acquisitions, voluntary context switches) and from the interventions above; the "
+                     "lock itself was not traced. Everything was measured on one four-core server under "
+                     "saturating closed-loop load.")
     out += notes + ["", README_END]
     return "\n".join(out) + "\n"
 
@@ -1800,6 +1960,8 @@ def provenance(data):
         lines.append(f"%   {f['name']}: {f['ok']}/{f['runs']} runs ok{left_out}, commit "
                      f"{(m.get('client', {}).get('git_commit') or '?')[:7]}, image "
                      f"{(m.get('server', {}).get('image_id') or '?')[:19]}")
+    for name in _anchor_folders(data.results_dir):
+        lines.append(f"%   superseded/{name}: read for meta:anchor-* only")
     return "\n".join(lines) + "\n"
 
 

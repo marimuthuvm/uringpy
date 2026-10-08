@@ -138,7 +138,7 @@ CSV_FIELDS = [
     "srv_completions", "srv_waits", "srv_handler_errors", "srv_handler_calls",
     "srv_gil_hold_ns", "srv_gil_wait_ns", "srv_gil_acquires", "srv_gil_releases",
     "srv_cpu_ns", "srv_nvcsw", "srv_nivcsw", "srv_python",
-    "srv_gil", "note",
+    "srv_gil", "note", "srv_gil_switches",
 ]
 
 # Two-sided 95% Student-t critical values, index = degrees of freedom.
@@ -276,6 +276,14 @@ def parse_proc_switches(log_text):
     if not vol or not inv:
         return None, None
     return sum(int(v) for v in vol), sum(int(v) for v in inv)
+
+
+def parse_proc_gil_switches(log_text):
+    """Sum of gil_switches= on the '[proc]' lines: how often the GIL changed
+    owner, counted by the interpreter (one GIL per process); None if the server
+    did not report it."""
+    values = re.findall(r"^\[proc\] .*\bgil_switches=(\d+)", log_text, re.M)
+    return sum(int(v) for v in values) if values else None
 
 
 def parse_runtime(log_text):
@@ -510,6 +518,9 @@ def run_one(server, cell, args, url):
     vol, inv = parse_proc_switches(logs)
     if vol is not None:
         row["srv_nvcsw"], row["srv_nivcsw"] = vol, inv
+    switches = parse_proc_gil_switches(logs)
+    if switches is not None:
+        row["srv_gil_switches"] = switches
     return row
 
 
@@ -580,8 +591,8 @@ def summarize(rows, meta=None):
               "server processes' own user+system time per request (kernel network "
               "work done outside them is not included). GIL hold and wait are per "
               "handler call, where timing was enabled.", ""]
-    lines += ["| engine | mode | workers | GIL | body B | batch cap | handler work | conns | n | req/s | ± 95% CI | CV % | scaling | p50 ms | p99 ms | server CPU % | busiest core % | client CPU % | syscalls/req | compl/enter | proc CPU µs/req | GIL hold µs/req | GIL wait µs/req | GIL rel. or acq./req | vol. ctx sw./req | flags |",
-              "| --- | --- | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |"]
+    lines += ["| engine | mode | workers | GIL | body B | batch cap | handler work | conns | n | req/s | ± 95% CI | CV % | scaling | p50 ms | p99 ms | server CPU % | busiest core % | client CPU % | syscalls/req | compl/enter | proc CPU µs/req | GIL hold µs/req | GIL wait µs/req | GIL rel. or acq./req | GIL switches/req | vol. ctx sw./req | flags |",
+              "| --- | --- | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |"]
     for key in order:
         engine, mode, workers, resp_size, max_batch, handler_work, conns = key
         runs = groups[key]
@@ -627,6 +638,12 @@ def summarize(rows, meta=None):
             handoffs = float("nan")
         vcsw = _sum([r for r in good if not math.isnan(_num(r, "srv_requests"))], "srv_nvcsw")
         vcsw_req = vcsw / req if req and vcsw else float("nan")
+        # Hand-offs of the GIL counted by the interpreter (servers that count
+        # their requests only; make_tables.py estimates the rest).
+        counted = [r for r in good if not math.isnan(_num(r, "srv_requests"))
+                   and not math.isnan(_num(r, "srv_gil_switches"))]
+        sw_req = (_sum(counted, "srv_gil_switches") / _sum(counted, "srv_requests")
+                  if counted and _sum(counted, "srv_requests") else float("nan"))
         client_cpu = _avg(good, "client_cpu_pct")
         flags = []
         if len(good) < len(runs):
@@ -650,7 +667,7 @@ def summarize(rows, meta=None):
             f"| {_f(_avg(good, 'lat_p50_ms'), 2)} | {_f(_avg(good, 'lat_p99_ms'), 2)} "
             f"| {_f(_avg(good, 'server_cpu_pct'), 1)} | {_f(_avg(good, 'server_max_core_pct'), 1)} "
             f"| {_f(client_cpu, 1)} | {_f(spr, 3)} | {_f(cpe, 1)} | {_f(cpu_us, 2)} "
-            f"| {_f(hold_us, 2)} | {_f(wait_us, 2)} | {_f(handoffs, 3)} | {_f(vcsw_req, 3)} "
+            f"| {_f(hold_us, 2)} | {_f(wait_us, 2)} | {_f(handoffs, 3)} | {_f(sw_req, 3)} | {_f(vcsw_req, 3)} "
             f"| {'; '.join(flags)} |")
     lines.append("")
     return "\n".join(lines)

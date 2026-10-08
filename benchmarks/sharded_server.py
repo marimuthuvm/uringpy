@@ -132,13 +132,27 @@ def _fmt(value):
     return f"{value:.2f}" if isinstance(value, float) else str(value)
 
 
+def _gil_switches():
+    """How often this interpreter's GIL was taken by a thread other than its
+    previous holder: CPython's own counter, read by uringpy._gilstat. None
+    where it cannot be read (module not built, or no GIL)."""
+    try:
+        from uringpy import _gilstat
+    except ImportError:
+        return None
+    return _gilstat.switch_count()
+
+
 def _print_stats():
     # CPU time (user + system) this process has used, for cost-per-request,
     # and its context switches: a thread that has to wait for the GIL sleeps,
-    # which the kernel counts as a voluntary context switch.
+    # which the kernel counts as a voluntary context switch. gil_switches is
+    # the number of times the GIL changed owner, counted by the interpreter.
     ru = resource.getrusage(resource.RUSAGE_SELF)
+    switches = _gil_switches()
+    extra = f" gil_switches={switches}" if switches is not None else ""
     print(f"[proc] cpu_ns={time.process_time_ns()} nvcsw={ru.ru_nvcsw} "
-          f"nivcsw={ru.ru_nivcsw}", flush=True)
+          f"nivcsw={ru.ru_nivcsw}{extra}", flush=True)
     for wid, get_stats in _STAT_SOURCES:
         stats = get_stats()
         print(f"[worker {wid}] " + " ".join(f"{k}={_fmt(v)}" for k, v in stats.items()),
@@ -558,6 +572,9 @@ WORKERS = {
     "asyncio-proto": _loop_worker("asyncio", proto=True),
     "uvloop": _loop_worker("uvloop"),
     "uvloop-proto": _loop_worker("uvloop", proto=True),
+    "uringcore-proto": _loop_worker("uringcore", proto=True),
+    "uringloop-proto": _loop_worker("uringloop", proto=True),
+    "uringcore-proto-app": _loop_worker("uringcore", proto=True, app=True),
     "uringcore": _loop_worker("uringcore"),
     "uringloop": _loop_worker("uringloop"),
     "uringpy-app": lambda host, port, wid: uringpy_worker(host, port, wid, app=True),

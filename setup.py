@@ -15,6 +15,14 @@ extensions = [
         sources=["uringpy/epoll.pyx"],
         extra_compile_args=["-O3", "-march=native"],
     ),
+    # Reads CPython's own count of GIL hand-offs between threads. It needs the
+    # interpreter's internal headers, so it is optional: if it does not build,
+    # everything else still does (see uringpy/gilstat.c).
+    Extension(
+        "uringpy._gilstat",
+        sources=["uringpy/gilstat.c"],
+        optional=True,
+    ),
 ]
 
 setup(

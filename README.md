@@ -12,9 +12,12 @@ that worker threads scale across cores **within one interpreter** on a standard
 > **Core finding.** For worker threads under the GIL, what batching buys is not
 > mainly fewer system calls but fewer **GIL hand-offs**. On one worker the
 > system-call interface and its batching are worth a modest factor. With several
-> worker threads, what decides scaling is how often the GIL changes hands per
-> request. That holds on `io_uring` and on `epoll`, and whether the loop is
-> written in C or in Python.
+> worker threads, on a four-core server under saturating load, what separates
+> designs that scale from designs that lose throughput is how often the GIL is
+> given up per request, together with how much of a request runs under it. That
+> holds on `io_uring` and on `epoll`, and whether the loop is written in C or in
+> Python. Hand-offs were inferred from counters and interventions; the lock
+> itself was not traced.
 
 ## Headline results
 
@@ -62,11 +65,12 @@ All numbers below were measured at commit `5db4eab` and are written into this fi
 - **It is the GIL hand-offs, not the system calls.** The Python loop on `epoll` makes the same two system calls per request in both of its variants. Releasing the GIL once per pass instead of once per system call takes four threads from 0.62× to 2.35× the throughput of one. The Python loop on `io_uring` scales by 2.19×, and by 0.94× if it merely holds the GIL during its submitting call. Without the GIL all six loops scale alike.
 - **GIL batching.** With a Python handler on every request, taking the GIL once per batch instead of once per request (`engine.set_gil_batching(True)`) lifts four-thread throughput from 201.8 to 279.5 thousand requests per second. That is 0.93 of four processes of the same reactor and 1.28× the best process-per-worker baseline measured (uvloop, Protocol API). The same batching rescues the `epoll` reactor.
 - **Limits, measured.**
-  - **Handler length.** The handler above holds the GIL for 1.21 µs per request. With one that holds it for 4.04 µs, batched threads deliver 0.65 of what processes do, and less with longer ones. No design recovers thread scaling once the lock itself is busy.
+  - **Handler length.** The handler above holds the GIL for 1.21 µs per request. With one that holds it for 4.04 µs, batched threads deliver 0.63 of what its processes do, and less with longer ones. No design recovers thread scaling once the lock itself is busy.
   - **Light load.** Batches need a backlog. With 64 connections instead of 400, batched threads scale by 1.64× instead of 2.19×.
   - **Free-threaded build.** `asyncio` threads scale there (2.48×); uringpy keeps an advantage in speed per worker (1.46× at four workers on the transport path) and no longer one in scaling.
   - **Large responses.** With bodies of 16 KiB or more the network, not the server, was the limit.
   - On the transport path the C loop is only 1.12× faster at four workers than the Python loop on `io_uring`.
+- **What was not observed.** GIL hand-offs are inferred from counters (releases, acquisitions, voluntary context switches) and from the interventions above; the lock itself was not traced. Everything was measured on one four-core server under saturating closed-loop load.
 
 <!-- results:end -->
 
@@ -198,28 +202,34 @@ python3 benchmarks/bench_matrix.py --experiment handler     # per-request Python
 # or everything the paper reports, on both builds, at the checked-out commit:
 # builds the images on the server, runs the tests in them, then every experiment
 bash benchmarks/run_paper_experiments.sh
-# afterwards, on the same images: 1600 connections and the io_uring-based
-# asyncio loop with the container's limits raised, and three more handler sizes
+# afterwards, on the same images with the container's limits raised:
+# 1600 connections and three more handler sizes
 BASE_COMMIT=<commit of the images> bash benchmarks/run_supplement.sh
+# revision: GIL hand-offs counted by the interpreter, the io_uring asyncio
+# loops on Python 3.13, and (after resizing the VMs) a server with more cores
+PROFILE=small bash benchmarks/run_revision.sh
+PROFILE=large bash benchmarks/run_revision.sh
 ```
 
 Defaults: 5 repetitions of 20 s after a 5 s warm-up, 400 connections; one
-experiment takes between 15 minutes and 4.5 hours (about 33 s per run), and
-`run_paper_experiments.sh` about 18 hours. Use `--image uringpy:314t` for the
+experiment takes between 15 minutes and 3.6 hours (about 27 s per run), and
+`run_paper_experiments.sh` about 15 hours. Use `--image uringpy:314t` for the
 free-threaded build (uvloop is left out of that image because it is not
 free-threading-ready). For the `app` experiment on that image pass
-`--engines "uringpy-app asyncio-app asyncio-proto-app"`. Every run records the Python version and the GIL state
+`--engines "uringpy-app uringpy-app-batch c-epoll-app c-epoll-app-batch asyncio-app asyncio-proto-app"`. Every run records the Python version and the GIL state
 the server process reported, and the summary shows it. The `loops` experiment
-(uringcore, uringloop) needs the image from
-`benchmarks/crossruntime/Dockerfile.py313`. The summary flags
+(uringcore, uringloop) needs the image that `benchmarks/run_loops_experiment.sh`
+builds from `Dockerfile.loops`. Neither loop could be measured on Python 3.14
+(see `benchmarks/EXPERIMENTS.md`, "Supplementary run"), so the results contain
+no `io_uring`-based `asyncio` loop. The summary flags
 cells where the client was above 85% CPU, since there the load generator, not
 the server, may be the limit.
 
 The `handler` experiment varies how much interpreted work each request does
 (`HANDLER_WORK`) and switches on `URingEngine.set_gil_timing()`, so every run
 also reports how long a request waits for the GIL and how long it holds it.
-Those two numbers are what a GIL-contention model needs as inputs, measured
-instead of assumed.
+Those two numbers are measured inputs of the model. The number of GIL hand-offs
+and what one costs are not measured (see `benchmarks/EXPERIMENTS.md`, Formulas).
 
 `python3 benchmarks/make_tables.py` turns everything under
 `benchmarks/results/` into the result tables (LaTeX), and
@@ -276,8 +286,15 @@ SERVER=user@host SERVER_IP=10.0.0.2 bash benchmarks/bodysize_bench.sh
 - Evaluated on one protocol, one kernel and one machine family, with a 4-core
   server whose cores are shared by the workers and the kernel's network stack
   (one worker already keeps about 1.2 cores busy).
-- The multicore thread-scaling benefit applies to I/O-framing-dominated
-  services; per-request Python logic requires process-level parallelism.
+- Worker threads keep up with one process per worker only while little Python
+  runs per request: with GIL batching and a handler that holds the GIL for about
+  a microsecond they come close, and they fall behind steadily as the handler
+  grows (the measured fractions are under "Headline results"). Longer handlers
+  need process-level parallelism or the free-threaded build. With the lock busy
+  for two thirds of the time at four workers, more cores would not help the
+  threads much; that was not measured.
+- The `io_uring`-based `asyncio` loops (`uringcore`, `uringloop`) could not be
+  measured on Python 3.14, so nothing here compares against them.
 - Not a drop-in `asyncio` replacement — it is a specialized reactor.
 - Both reactors reply once per `recv()` and do not parse HTTP framing, so
   pipelined or fragmented requests are not handled. Responses must be shorter

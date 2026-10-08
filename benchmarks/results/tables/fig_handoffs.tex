@@ -14,6 +14,7 @@
 %   scaling-uringpy-5db4eab-20261007T071026Z: 200/200 runs ok, commit 5db4eab, image sha256:afe3a37b1f7d
 %   scaling-uringpy-5db4eabt-20261007T121646Z: 120/120 runs ok, commit 5db4eab, image sha256:1ebee854d3c1
 %   size-uringpy-5db4eab-20261007T160752Z: 60/60 runs ok, commit 5db4eab, image sha256:afe3a37b1f7d
+%   superseded/loops-uringpy-5db4eab-loops-20261007T191746Z: read for meta:anchor-* only
 \begin{figure}[t]
 \centering
 \definecolor{sA}{HTML}{2A78D6}
@@ -26,22 +27,24 @@
 \addplot[only marks, ink, mark=asterisk, mark size=2.4pt, error bars/.cd, y dir=both, y explicit, error bar style={line width=0.4pt}, error mark options={rotate=90, mark size=1.5pt, line width=0.4pt}] coordinates {(0.0008769,2.2778) +- (0,0.03084) (0.0010253,2.3649) +- (0,0.02687)};
 \addlegendentry{C loop, no Python}
 \addplot[sB, mark=square*, mark options={fill=sB}, error bars/.cd, y dir=both, y explicit, error bar style={line width=0.4pt}, error mark options={rotate=90, mark size=1.5pt, line width=0.4pt}] coordinates {(0.013187,2.1727) +- (0,0.03073) (0.014731,2.2023) +- (0,0.04191) (0.03734,2.1217) +- (0,0.05962) (0.065815,2.0442) +- (0,0.03881) (0.12835,1.9279) +- (0,0.05366) (0.24843,1.7796) +- (0,0.07594) (0.40747,1.5731) +- (0,0.03304) (0.43068,1.5494) +- (0,0.06204)};
-\addlegendentry{C reactor + handler, \code{io\_uring}}
+\addlegendentry{reactor + handler, \code{io\_uring}}
 \addplot[only marks, sA, mark=*, mark options={fill=sA}, error bars/.cd, y dir=both, y explicit, error bar style={line width=0.4pt}, error mark options={rotate=90, mark size=1.5pt, line width=0.4pt}] coordinates {(0.0032331,2.3495) +- (0,0.05382) (0.012765,2.194) +- (0,0.07449) (2.0477,0.62103) +- (0,0.02089)};
 \addlegendentry{loop in Python}
 \addplot[only marks, sC, mark=triangle*, mark options={fill=sC}, mark size=2.4pt, error bars/.cd, y dir=both, y explicit, error bar style={line width=0.4pt}, error mark options={rotate=90, mark size=1.5pt, line width=0.4pt}] coordinates {(0.0074881,2.332) +- (0,0.05171) (1.4376,0.69666) +- (0,0.01264)};
-\addlegendentry{C reactor + handler, \code{epoll}}
+\addlegendentry{reactor + handler, \code{epoll}}
 \addplot[only marks, ink, mark=diamond, mark size=2.4pt, error bars/.cd, y dir=both, y explicit, error bar style={line width=0.4pt}, error mark options={rotate=90, mark size=1.5pt, line width=0.4pt}] coordinates {(2.6065,0.59901) +- (0,0.01124) (2.8598,0.51856) +- (0,0.01224) (2.9069,0.51236) +- (0,0.01045) (3.029,0.4851) +- (0,0.008887) (3.2244,0.47737) +- (0,0.006988) (3.6834,0.36058) +- (0,0.008754) (3.8257,0.34753) +- (0,0.005961)};
 \addlegendentry{\code{asyncio}, \code{uvloop}}
 \addplot[ink, densely dashed, line width=0.5pt] coordinates {(0.000438452,2.301) (9.56418,2.301)};
 \addlegendentry{C loop as processes}
-\addplot[forget plot, only marks, ink, mark=o, error bars/.cd, y dir=both, y explicit, error bar style={line width=0.4pt}, error mark options={rotate=90, mark size=1.5pt, line width=0.4pt}] coordinates {(0.020937,0.9426) +- (0,0.04625)};
+\addplot[only marks, ink, mark=o, error bars/.cd, y dir=both, y explicit, error bar style={line width=0.4pt}, error mark options={rotate=90, mark size=1.5pt, line width=0.4pt}] coordinates {(0.020937,0.9426) +- (0,0.04625)};
+\addlegendentry{Python loop, GIL held}
+\draw[-{Stealth[length=1.6mm]}, black!45, line width=0.4pt, shorten <=2.5pt, shorten >=2.5pt] (axis cs:2.0477,0.62103) -- (axis cs:0.0032331,2.3495);
+\draw[-{Stealth[length=1.6mm]}, black!45, line width=0.4pt, shorten <=2.5pt, shorten >=2.5pt] (axis cs:1.4376,0.69666) -- (axis cs:0.0074881,2.332);
 \node[inner sep=0pt, pin={[font=\scriptsize, inner sep=1pt, pin distance=4mm, pin edge={black!50, thin}]90:{\code{py-epoll-batch}}}] at (axis cs:0.0032331,2.3495) {};
 \node[inner sep=0pt, pin={[font=\scriptsize, inner sep=1pt, pin distance=6mm, pin edge={black!50, thin}]270:{\code{py-uring}}}] at (axis cs:0.012765,2.194) {};
 \node[inner sep=0pt, pin={[font=\scriptsize, inner sep=1pt, pin distance=7mm, pin edge={black!50, thin}]205:{\code{py-epoll}}}] at (axis cs:2.0477,0.62103) {};
-\node[inner sep=0pt, pin={[font=\scriptsize, inner sep=1pt, pin distance=4mm, pin edge={black!50, thin}]270:{\code{py-uring-held}}}] at (axis cs:0.020937,0.9426) {};
 \end{axis}
 \end{tikzpicture}
-\caption{Thread scaling at four workers against voluntary context switches of the server per request (GIL build, 400 connections; bars are 95\% half-widths; the grey line marks no gain over one worker, the dashed line the scaling of the C loop run as processes). Shown are the thread-mode configurations of Tables~\ref{tab:factorial}, \ref{tab:scaling}, \ref{tab:app} and~\ref{tab:gilbatch}, an engine that appears in two of them once. The connected points are one reactor with the number of requests served per GIL acquisition varied. For \code{asyncio} and \code{uvloop} the request count is the client's. \code{py-uring-held} switches rarely but holds the GIL while the kernel performs the sends.}
+\caption{Thread scaling at four workers against voluntary context switches of the server per request (GIL build, 400 connections; bars are 95\% half-widths; the grey line marks no gain over one worker, the dashed line the scaling of the C loop run as processes). Shown are the thread-mode configurations of Tables~\ref{tab:factorial}, \ref{tab:scaling}, \ref{tab:app} and~\ref{tab:gilbatch}, an engine that appears in two of them once. The connected points are one reactor with the number of requests served per GIL acquisition varied. The arrows mark two interventions: the Python loop on \code{epoll} with its releases batched, and the \code{epoll} reactor taking the GIL per batch instead of per request. For \code{asyncio} and \code{uvloop} the request count is the client's.}
 \label{fig:handoffs}
 \end{figure}
