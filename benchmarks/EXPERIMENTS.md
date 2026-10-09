@@ -345,8 +345,10 @@ Outcome against the expectations (tables from
   thread that released the lock usually takes it back first.
 - 1b holds except for the hold-time control. The 10 configurations with
   `S_4 >= 2` show at most 0.032; the 6 with `S_4 < 1` at least 0.317, except
-  `py-uring-held` (0.000), which never gives up the lock and does not scale
-  because it holds it.
+  `py-uring-held` (0.000; about 49 owner changes a second over the server's
+  life), which holds the lock while the kernel performs its sends inside the
+  submitting call and does not scale. Why the other threads so seldom take
+  the lock between those calls was not traced.
 - 1c confirmed: 0.914 for `c-epoll-app` against 0.080 for `uringpy-app`.
 - 1d confirmed: from 0.097 at a cap of 1 to 0.021 at 64.
 - 1e refuted. A day later, one-worker throughput was 0.89 to 1.00 times the
