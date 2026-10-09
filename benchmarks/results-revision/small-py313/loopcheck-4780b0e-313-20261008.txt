@@ -1,0 +1,46 @@
+# benchmarks/check_loop.py in uringpy:4780b0e-313-loops (CPython 3.13.7), docker run --ulimit nofile=65536:65536 --ulimit memlock=-1:-1
+# packages: python 3.13.7; uvloop 0.23.0; uringcore 0.9.1; uringloop 0.1.0
+== asyncio-proto
+[check] sequential engine=asyncio-proto answered=20000/20000 server_alive=1
+[check] concurrent engine=asyncio-proto conns=400 replies=1200/1200 connect_failed=0 closed_or_timed_out=0 server_alive=1
+[result] engine=asyncio-proto python=3.13.7 PASS
+== uvloop-proto
+[check] sequential engine=uvloop-proto answered=20000/20000 server_alive=1
+[check] concurrent engine=uvloop-proto conns=400 replies=1200/1200 connect_failed=0 closed_or_timed_out=0 server_alive=1
+[result] engine=uvloop-proto python=3.13.7 PASS
+== uringcore
+[check] sequential engine=uringcore answered=996/20000 server_alive=1 error='TimeoutError: timed out'
+    server: [uringcore/process] starting 1 worker(s)
+    server: /app/benchmarks/sharded_server.py:607: DeprecationWarning: This process (pid=7) is multi-threaded, use of fork() may lead to deadlocks in the child.
+    server:   pid = os.fork()
+    server: serving on 127.0.0.1:18080 (1 process workers)
+[check] concurrent engine=uringcore conns=400 replies=575/1200 connect_failed=0 closed_or_timed_out=400 server_alive=1
+    server:   File "/opt/py/lib/python3.13/site-packages/uringcore/loop.py", line 237, in _handle_recv_completion
+    server:     self._core.submit_recv(fd)
+    server:     ~~~~~~~~~~~~~~~~~~~~~~^^^^
+    server: RuntimeError: No buffers available for recv
+[result] engine=uringcore python=3.13.7 FAIL
+== uringcore-proto
+[check] sequential engine=uringcore-proto answered=992/20000 server_alive=1 error='ConnectionResetError: [Errno 104] Connection reset by peer'
+    server:   File "/opt/py/lib/python3.13/site-packages/uringcore/loop.py", line 237, in _handle_recv_completion
+    server:     self._core.submit_recv(fd)
+    server:     ~~~~~~~~~~~~~~~~~~~~~~^^^^
+    server: RuntimeError: No buffers available for recv
+[check] concurrent engine=uringcore-proto conns=400 replies=575/1200 connect_failed=0 closed_or_timed_out=400 server_alive=1
+    server:   File "/opt/py/lib/python3.13/site-packages/uringcore/loop.py", line 237, in _handle_recv_completion
+    server:     self._core.submit_recv(fd)
+    server:     ~~~~~~~~~~~~~~~~~~~~~~^^^^
+    server: RuntimeError: No buffers available for recv
+[result] engine=uringcore-proto python=3.13.7 FAIL
+== uringloop
+[check] sequential engine=uringloop answered=0/20000 server_alive=0 error='ConnectionRefusedError: [Errno 111] Connection refused'
+    server: [uringloop] engine unavailable in this environment: AttributeError("module 'uringloop' has no attribute 'URingEventLoop'")
+[check] concurrent engine=uringloop conns=400 replies=0/1200 connect_failed=400 closed_or_timed_out=0 server_alive=0
+    server: [uringloop] engine unavailable in this environment: AttributeError("module 'uringloop' has no attribute 'URingEventLoop'")
+[result] engine=uringloop python=3.13.7 FAIL
+== uringloop-proto
+[check] sequential engine=uringloop-proto answered=0/20000 server_alive=0 error='ConnectionRefusedError: [Errno 111] Connection refused'
+    server: [uringloop-proto] engine unavailable in this environment: AttributeError("module 'uringloop' has no attribute 'URingEventLoop'")
+[check] concurrent engine=uringloop-proto conns=400 replies=0/1200 connect_failed=400 closed_or_timed_out=0 server_alive=0
+    server: [uringloop-proto] engine unavailable in this environment: AttributeError("module 'uringloop' has no attribute 'URingEventLoop'")
+[result] engine=uringloop-proto python=3.13.7 FAIL

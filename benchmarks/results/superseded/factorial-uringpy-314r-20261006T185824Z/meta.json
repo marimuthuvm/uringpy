@@ -1,0 +1,157 @@
+{
+  "experiment": "factorial",
+  "started_utc": "2026-10-06T18:58:24+00:00",
+  "params": {
+    "reps": 5,
+    "duration": 20,
+    "warmup": 5,
+    "conns": 400,
+    "threads": 8,
+    "seed": 70639362,
+    "port": 8080,
+    "url": "http://10.142.0.2:8080/"
+  },
+  "cells": [
+    [
+      "uringpy",
+      "thread",
+      1,
+      13,
+      0,
+      0
+    ],
+    [
+      "uringpy",
+      "thread",
+      2,
+      13,
+      0,
+      0
+    ],
+    [
+      "uringpy",
+      "thread",
+      4,
+      13,
+      0,
+      0
+    ],
+    [
+      "c-epoll",
+      "thread",
+      1,
+      13,
+      0,
+      0
+    ],
+    [
+      "c-epoll",
+      "thread",
+      2,
+      13,
+      0,
+      0
+    ],
+    [
+      "c-epoll",
+      "thread",
+      4,
+      13,
+      0,
+      0
+    ],
+    [
+      "py-uring",
+      "thread",
+      1,
+      13,
+      0,
+      0
+    ],
+    [
+      "py-uring",
+      "thread",
+      2,
+      13,
+      0,
+      0
+    ],
+    [
+      "py-uring",
+      "thread",
+      4,
+      13,
+      0,
+      0
+    ],
+    [
+      "py-epoll",
+      "thread",
+      1,
+      13,
+      0,
+      0
+    ],
+    [
+      "py-epoll",
+      "thread",
+      2,
+      13,
+      0,
+      0
+    ],
+    [
+      "py-epoll",
+      "thread",
+      4,
+      13,
+      0,
+      0
+    ],
+    [
+      "py-uring-held",
+      "thread",
+      1,
+      13,
+      0,
+      0
+    ],
+    [
+      "py-uring-held",
+      "thread",
+      2,
+      13,
+      0,
+      0
+    ],
+    [
+      "py-uring-held",
+      "thread",
+      4,
+      13,
+      0,
+      0
+    ]
+  ],
+  "client": {
+    "kernel": "7.0.0-1011-gcp",
+    "nproc": 8,
+    "python": "3.12.3",
+    "cpu_model": "AMD EPYC 7B13",
+    "machine_type": "t2d-standard-8",
+    "wrk": "wrk debian/4.1.0-4build2 [epoll] Copyright (C) 2012 Will Glozer",
+    "git_commit": "d9bc686ceda9d7bbaf2778a7573a869cd43c3d5b",
+    "git_dirty": false
+  },
+  "server": {
+    "target": "marimuthu_vm@10.142.0.2",
+    "image": "uringpy:314r",
+    "kernel": "7.0.0-1011-gcp",
+    "nproc": "4",
+    "cpu_model": "AMD EPYC 7B13",
+    "machine_type": "t2d-standard-4",
+    "image_id": "sha256:197cfae0020359fd7e4ef845463a17083c8e890cd638be95a2330af7bf1f15bc",
+    "interpreter": "3.14.7 gil_on"
+  },
+  "finished_utc": "2026-10-06T19:32:28+00:00"
+}

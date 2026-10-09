@@ -1,0 +1,32 @@
+# Image for the `loops` experiment: a benchmark image (Dockerfile.bench) plus
+# the two io_uring-based asyncio event loops, so that they are measured on the
+# same interpreter, machine and driver as everything else.
+#
+#   docker build -f Dockerfile.loops --build-arg BASE=uringpy:<commit> \
+#       -t uringpy:<commit>-loops .
+#
+# Both loops are third-party packages from PyPI. Either may fail to install on
+# a given Python version; the build then goes on without it and the driver
+# records that engine as unavailable.
+ARG BASE=uringpy:314
+FROM ${BASE}
+
+# uringloop publishes source only and compiles its bundled liburing; the base
+# image has the C compiler and make it needs.
+RUN python3 -m pip install --no-cache-dir uringloop \
+    || echo "[warn] uringloop not installed"
+
+# uringcore is written in Rust. Where PyPI has no wheel for this interpreter it
+# is built from source, which needs a Rust toolchain.
+RUN python3 -m pip install --no-cache-dir uringcore \
+    || ( curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal \
+         && . "$HOME/.cargo/env" \
+         && PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 \
+            python3 -m pip install --no-cache-dir uringcore ) \
+    || echo "[warn] uringcore not installed"
+
+# The server script of the commit this image is built at: its loader for these
+# loops may be newer than the one in the base image. Nothing else is replaced.
+COPY benchmarks/sharded_server.py /app/benchmarks/sharded_server.py
+
+RUN python3 -c "import importlib.util as u; [print('[loops]', m, 'installed' if u.find_spec(m) else 'MISSING') for m in ('uvloop', 'uringcore', 'uringloop')]"

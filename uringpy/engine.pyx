@@ -4,10 +4,25 @@
 # cython: freethreading_compatible=True
 
 import socket
-from libc.stdlib cimport malloc, free
+import sys
+import traceback
+from libc.stdlib cimport malloc, free, realloc
 from libc.stdint cimport uint8_t, uint16_t, uint32_t, uint64_t, int32_t, uintptr_t
-from libc.string cimport memset
+from libc.string cimport memset, memcpy
+from libc.errno cimport EINTR
+from cpython.ref cimport PyObject
+from cpython.exc cimport PyErr_CheckSignals
+from posix.time cimport clock_gettime, timespec, CLOCK_MONOTONIC
+from cpython.bytes cimport PyBytes_FromStringAndSize, PyBytes_AsStringAndSize
 from cpython.buffer cimport PyObject_GetBuffer, PyBuffer_Release, PyBUF_SIMPLE
+
+# A SEND completion carries the number of response bytes already sent in the low
+# 24 bits of user_data, so a response must be shorter than 16 MiB.
+cdef enum:
+    MAX_RESPONSE_LEN = 0xFFFFFF
+    # Requests collected before the GIL is taken once for all of them
+    # (set_gil_batching). A fuller batch is handled in several acquisitions.
+    PEND_CAP = 1024
 
 
 cdef class SlabView:
@@ -118,6 +133,74 @@ cdef extern from "slab.h" nogil:
 cdef extern from "unistd.h" nogil:
     int close(int fd)
 
+
+cdef inline unsigned long long _now_ns() noexcept nogil:
+    cdef timespec ts
+    clock_gettime(CLOCK_MONOTONIC, &ts)
+    return <unsigned long long>ts.tv_sec * 1000000000ULL \
+        + <unsigned long long>ts.tv_nsec
+
+
+# --- nogil helpers shared by the C-side reactors -----------------------------
+# Module-level inline functions (not methods) so the C compiler inlines them
+# into the reactor loop.
+
+cdef inline io_uring_sqe* _get_sqe(io_uring *ring,
+                                   unsigned long long *enters) noexcept nogil:
+    # If the submission queue is full, flush it once and retry instead of
+    # silently dropping the operation. The flush is an io_uring_enter, so it is
+    # counted in `enters`.
+    cdef io_uring_sqe *sqe = io_uring_get_sqe(ring)
+    if sqe == NULL:
+        io_uring_submit(ring)
+        enters[0] += 1
+        sqe = io_uring_get_sqe(ring)
+    return sqe
+
+
+cdef inline void _arm_accept(io_uring *ring, int listen_fd,
+                             unsigned long long *enters) noexcept nogil:
+    cdef io_uring_sqe *sqe = _get_sqe(ring, enters)
+    if sqe != NULL:
+        io_uring_prep_accept(sqe, listen_fd, NULL, NULL, 0)
+        sqe.user_data = (<uint64_t>1 << 56) | ((<uint64_t>(<uint32_t>listen_fd)) << 24)
+
+
+cdef inline void _arm_recv(io_uring *ring, slab_pool_t *pool, int fd,
+                           unsigned long long *enters) noexcept nogil:
+    # Queue a recv into a fresh slab slot. If no slot or SQE is available the
+    # connection is closed rather than left open with nothing armed on it.
+    cdef int32_t slot = -1
+    cdef void *buf = slab_alloc(pool, &slot)
+    cdef io_uring_sqe *sqe
+    if buf == NULL:
+        close(fd)
+        return
+    sqe = _get_sqe(ring, enters)
+    if sqe == NULL:
+        slab_free(pool, slot)
+        close(fd)
+        return
+    io_uring_prep_recv(sqe, fd, buf, pool.slot_size, 0)
+    sqe.user_data = (<uint64_t>2 << 56) | ((<uint64_t>(<uint32_t>fd)) << 24) \
+        | (<uint64_t>(slot & 0xFFFFFF))
+
+
+cdef inline void _arm_send(io_uring *ring, int fd, const char *base,
+                           size_t total, size_t off,
+                           unsigned long long *enters) noexcept nogil:
+    # Queue a send of base[off:total]. `base` must stay valid until the whole
+    # response has been sent; `off` rides in user_data so a short send resumes
+    # where it stopped.
+    cdef io_uring_sqe *sqe = _get_sqe(ring, enters)
+    if sqe == NULL:
+        close(fd)
+        return
+    io_uring_prep_send(sqe, fd, base + off, total - off, 0)
+    sqe.user_data = (<uint64_t>3 << 56) | ((<uint64_t>(<uint32_t>fd)) << 24) \
+        | (<uint64_t>(off & 0xFFFFFF))
+
+
 cdef class URingEngine:
     cdef io_uring ring
     cdef slab_pool_t *pool
@@ -134,6 +217,36 @@ cdef class URingEngine:
     cdef char *_echo_resp
     cdef size_t _echo_resp_len
     cdef int _stop
+    cdef int _serving
+    cdef object _pending_exc
+    # Per-connection response buffers for serve_forever_app, indexed by fd.
+    # Owned by this engine (one engine per worker), so never shared.
+    cdef char **_conn_buf
+    cdef size_t *_conn_cap
+    cdef size_t *_conn_len
+    cdef int _conn_n
+    cdef unsigned long long stat_handler_calls
+    cdef unsigned long long stat_handler_errors
+    # Reactor-only counters: io_uring_enter calls, responses fully sent, and
+    # close() calls made by the loop.
+    cdef unsigned long long stat_enters
+    cdef unsigned long long stat_requests
+    cdef unsigned long long stat_closes
+    cdef unsigned _max_batch
+    # Optional timing of the GIL-held section of serve_forever_app.
+    cdef bint _gil_timing
+    cdef unsigned long long stat_gil_hold_ns
+    cdef unsigned long long stat_gil_wait_ns
+    # GIL batching (serve_forever_app): requests waiting for the next GIL
+    # acquisition, as parallel arrays of fd, slab slot and length. After the
+    # handlers have run, _pend_res holds each one's result (0 or -1).
+    cdef bint _gil_batch
+    cdef int *_pend_fd
+    cdef int *_pend_slot
+    cdef int *_pend_res
+    cdef int _pend_n
+    cdef int _pend_cap
+    cdef unsigned long long stat_gil_acquires
     def __cinit__(self, unsigned int entries=1024, size_t slot_size=4096, size_t total_slots=1024):
         cdef int ret = io_uring_queue_init(entries, &self.ring, 0)
         if ret < 0:
@@ -153,9 +266,47 @@ cdef class URingEngine:
         self._echo_resp = NULL
         self._echo_resp_len = 0
         self._stop = 0
+        self._serving = 0
+        self._pending_exc = None
+        self._conn_buf = NULL
+        self._conn_cap = NULL
+        self._conn_len = NULL
+        self._conn_n = 0
+        self.stat_handler_calls = 0
+        self.stat_handler_errors = 0
+        self.stat_enters = 0
+        self.stat_requests = 0
+        self.stat_closes = 0
+        self._max_batch = 0
+        self._gil_timing = False
+        self.stat_gil_hold_ns = 0
+        self.stat_gil_wait_ns = 0
+        self._gil_batch = False
+        self._pend_fd = NULL
+        self._pend_slot = NULL
+        self._pend_res = NULL
+        self._pend_n = 0
+        self._pend_cap = PEND_CAP
+        self.stat_gil_acquires = 0
         self.initialized = True
 
     def __dealloc__(self):
+        cdef int i
+        if self._conn_buf != NULL:
+            for i in range(self._conn_n):
+                if self._conn_buf[i] != NULL:
+                    free(self._conn_buf[i])
+            free(self._conn_buf)
+        if self._conn_cap != NULL:
+            free(self._conn_cap)
+        if self._conn_len != NULL:
+            free(self._conn_len)
+        if self._pend_fd != NULL:
+            free(self._pend_fd)
+        if self._pend_slot != NULL:
+            free(self._pend_slot)
+        if self._pend_res != NULL:
+            free(self._pend_res)
         if self.initialized:
             if self.buf_ring != NULL and self.buf_count > 0:
                 io_uring_free_buf_ring(&self.ring, self.buf_ring, self.buf_count, self.buf_gid)
@@ -371,8 +522,18 @@ cdef class URingEngine:
         sqe.user_data = (<uint64_t>3 << 56) | ((<uint64_t>(<uint32_t>fd)) << 24) \
             | (<uint64_t>(slot_idx & 0xFFFFFF))
 
-    def flush(self):
-        cdef int ret = io_uring_submit(&self.ring)
+    def flush(self, bint release_gil=True):
+        # Submit the queued operations with one io_uring_enter. The kernel can
+        # perform them (a send, for instance) inside this call, so the GIL is
+        # released around it. release_gil=False keeps the GIL, which is how
+        # this method behaved up to 0.1.x; it exists so that the difference
+        # can be measured.
+        cdef int ret
+        if release_gil:
+            with nogil:
+                ret = io_uring_submit(&self.ring)
+        else:
+            ret = io_uring_submit(&self.ring)
         if ret < 0:
             raise OSError(-ret, "io_uring_submit failed")
         self.stat_submits += 1
@@ -383,28 +544,108 @@ cdef class URingEngine:
         # lower bound on the amortization factor: each blocking get_*events call
         # issues at most one io_uring_enter (and skips it when completions are
         # already ready), yet reaps this many completions on average.
+        #
+        # The C reactors (serve_forever_*) additionally count exactly:
+        #   enters   : io_uring_enter system calls issued by the loop
+        #   requests : responses sent in full
+        #   syscalls : enters + close() calls, i.e. every system call the loop
+        #              made (for comparison with EpollEngine's count)
         cdef double cpw = 0.0
+        cdef double cpe = 0.0
+        cdef double spr = 0.0
+        cdef unsigned long long syscalls = self.stat_enters + self.stat_closes
         if self.stat_waits > 0:
             cpw = <double>self.stat_completions / <double>self.stat_waits
+        if self.stat_enters > 0:
+            cpe = <double>self.stat_completions / <double>self.stat_enters
+        if self.stat_requests > 0:
+            spr = <double>syscalls / <double>self.stat_requests
         return {"waits": self.stat_waits, "completions": self.stat_completions,
-                "submits": self.stat_submits, "completions_per_wait": cpw}
+                "submits": self.stat_submits, "completions_per_wait": cpw,
+                "enters": self.stat_enters, "requests": self.stat_requests,
+                "syscalls": syscalls, "completions_per_enter": cpe,
+                "syscalls_per_request": spr,
+                "handler_calls": self.stat_handler_calls,
+                "handler_errors": self.stat_handler_errors,
+                "gil_hold_ns": self.stat_gil_hold_ns,
+                "gil_wait_ns": self.stat_gil_wait_ns,
+                "gil_acquires": self.stat_gil_acquires}
+
+    def set_gil_timing(self, bint enabled):
+        # serve_forever_app only. When enabled, every request records how long
+        # the worker waited to get the GIL (gil_wait_ns) and how long it then
+        # held it (gil_hold_ns: building the request bytes, the handler call,
+        # copying the response out). Costs three clock reads per request, so it
+        # is off by default.
+        if self._serving:
+            raise RuntimeError("set_gil_timing() cannot be called while serving")
+        self._gil_timing = enabled
+
+    def set_gil_batching(self, bint enabled, unsigned int max_requests=0):
+        # serve_forever_app only. Off (the default): the GIL is taken once per
+        # request, around that request's handler call. On: the requests found
+        # in one pass over the completion queue are collected, and the GIL is
+        # taken once for all of them. The handler sees the same calls in the
+        # same order; what changes is how often the lock changes hands, which
+        # is what limits worker threads when handlers are short. The price is
+        # that a response is not queued until the whole batch has been handled.
+        #
+        # max_requests caps how many requests one acquisition may serve (0 = as
+        # many as the pass found, up to 1024). It exists to measure how thread
+        # scaling depends on the number of requests per GIL acquisition;
+        # max_requests=1 is one acquisition per request through the batching
+        # code path.
+        if self._serving:
+            raise RuntimeError("set_gil_batching() cannot be called while serving")
+        if enabled and self._pend_fd == NULL:
+            self._pend_fd = <int*>malloc(PEND_CAP * sizeof(int))
+            self._pend_slot = <int*>malloc(PEND_CAP * sizeof(int))
+            self._pend_res = <int*>malloc(PEND_CAP * sizeof(int))
+            if self._pend_fd == NULL or self._pend_slot == NULL or self._pend_res == NULL:
+                raise MemoryError("Failed to allocate the request batch")
+        self._pend_cap = PEND_CAP if max_requests == 0 or max_requests > PEND_CAP else <int>max_requests
+        self._gil_batch = enabled
+
+    def set_max_batch(self, unsigned int n):
+        # Ablation knob for the C reactors: process at most `n` completions per
+        # io_uring_enter (0 = no limit, the default). n=1 forces one system
+        # call per completion, removing syscall amortization while leaving
+        # everything else unchanged.
+        if self._serving:
+            raise RuntimeError("set_max_batch() cannot be called while serving")
+        self._max_batch = n
 
     def _free_slot(self, int slot_idx):
         # Called by SlabView.release() to return a pinned slot to the pool.
         slab_free(self.pool, slot_idx)
 
-    # --- GIL-aware C-side reactor -------------------------------------------
-    # The novel path: instead of returning per-event Python objects (which force
-    # the interpreter -- and the GIL -- onto the hot path of every completion),
-    # serve_forever_echo drives the whole accept/recv/send protocol inside one
-    # nogil region. Python is never touched per event, so N worker threads each
-    # running this method scale across cores rather than serialising on the GIL.
+    # --- GIL-aware C-side reactors ------------------------------------------
+    # _serve drives the whole accept/recv/send protocol inside one nogil
+    # region, so a worker thread takes the GIL only where it calls the handler
+    # (never, for the echo reactor). What this buys worker threads is few GIL
+    # hand-offs per request; see benchmarks/EXPERIMENTS.md.
+    #
+    #   serve_forever_echo : every request gets the canned set_response() bytes.
+    #                        Python is never touched per event, so N worker
+    #                        threads scale across cores instead of serialising
+    #                        on the GIL.
+    #   serve_forever_app  : every request is passed to a Python handler inside a
+    #                        `with gil` block. Transport stays in C; only the
+    #                        handler call holds the GIL. This is the boundary
+    #                        case: per-request Python work re-serialises workers.
+    #
+    # Both reply once per recv() and do not parse request framing, so pipelined
+    # or fragmented requests are not handled. Responses of any size below 16 MiB
+    # are sent in full: a short send is resumed from the offset in user_data.
 
     def set_response(self, bytes response):
-        # Canned reply copied once into engine-owned C memory; the nogil loop
-        # memcpys it into a fresh slab slot per send (send needs a live buffer
-        # until completion).
+        # Canned reply copied once into engine-owned C memory. The nogil loop
+        # sends straight from this buffer, so it must not change while serving.
         cdef size_t n = len(response)
+        if self._serving:
+            raise RuntimeError("set_response() cannot be called while serving")
+        if n == 0 or n > MAX_RESPONSE_LEN:
+            raise ValueError("response must be 1..16777215 bytes")
         if self._echo_resp != NULL:
             free(self._echo_resp)
             self._echo_resp = NULL
@@ -418,105 +659,314 @@ cdef class URingEngine:
         self._echo_resp_len = n
 
     def stop(self):
-        # Cooperative stop; the nogil loop checks this between waits.
+        # Cooperative stop; the nogil loop checks this between waits, so it
+        # takes effect at the next completion.
         self._stop = 1
 
-    def serve_forever_echo(self, int listen_fd):
+    cdef int _ensure_conn(self, int fd) noexcept nogil:
+        # Grow the per-connection response table to cover `fd`. 0 on success.
+        cdef int new_n, i
+        cdef char **nb
+        cdef size_t *nc
+        cdef size_t *nl
+        if fd < 0:
+            return -1
+        if fd < self._conn_n:
+            return 0
+        new_n = self._conn_n * 2 if self._conn_n > 0 else 1024
+        while new_n <= fd:
+            new_n *= 2
+        nb = <char**>realloc(self._conn_buf, new_n * sizeof(char*))
+        if nb == NULL:
+            return -1
+        self._conn_buf = nb
+        nc = <size_t*>realloc(self._conn_cap, new_n * sizeof(size_t))
+        if nc == NULL:
+            return -1
+        self._conn_cap = nc
+        nl = <size_t*>realloc(self._conn_len, new_n * sizeof(size_t))
+        if nl == NULL:
+            return -1
+        self._conn_len = nl
+        for i in range(self._conn_n, new_n):
+            self._conn_buf[i] = NULL
+            self._conn_cap[i] = 0
+            self._conn_len[i] = 0
+        self._conn_n = new_n
+        return 0
+
+    cdef int _run_handler(self, PyObject *handler, int fd, const char *req,
+                          int n, unsigned long long t_req) noexcept with gil:
+        # Entry point from the nogil loop: acquires the GIL (that is what
+        # `with gil` does), runs the handler, releases it on return. `t_req` is
+        # the time just before the acquisition was requested, or 0 when timing
+        # is off.
+        cdef unsigned long long t_in
+        cdef int rc
+        self.stat_gil_acquires += 1
+        if t_req == 0:
+            return self._handle_locked(handler, fd, req, n)
+        t_in = _now_ns()
+        self.stat_gil_wait_ns += t_in - t_req
+        rc = self._handle_locked(handler, fd, req, n)
+        self.stat_gil_hold_ns += _now_ns() - t_in
+        return rc
+
+    cdef int _run_batch(self, PyObject *handler, int count,
+                        unsigned long long t_req) noexcept with gil:
+        # GIL-batching counterpart of _run_handler: one acquisition for `count`
+        # pending requests. Each request's result replaces its length in
+        # _pend_res. The wait is recorded once and the hold covers the batch,
+        # so both remain comparable per handler call.
+        cdef int i
+        cdef unsigned long long t_in = 0
+        cdef const char *mem = <const char*>self.pool.raw_memory
+        cdef size_t slot_size = self.pool.slot_size
+        self.stat_gil_acquires += 1
+        if t_req != 0:
+            t_in = _now_ns()
+            self.stat_gil_wait_ns += t_in - t_req
+        for i in range(count):
+            if self._stop:
+                # A handler raised KeyboardInterrupt or SystemExit: do not call
+                # the rest; their connections are closed as the reactor stops.
+                self._pend_res[i] = -1
+                continue
+            self._pend_res[i] = self._handle_locked(
+                handler, self._pend_fd[i],
+                mem + <size_t>self._pend_slot[i] * slot_size, self._pend_res[i])
+        if t_req != 0:
+            self.stat_gil_hold_ns += _now_ns() - t_in
+        return 0
+
+    cdef void _flush_pending(self, PyObject *handler, bint timing,
+                             unsigned long long *enters) noexcept nogil:
+        # Run the handlers of the collected requests under one GIL acquisition,
+        # then, with the GIL released again, free their receive buffers and
+        # queue the sends.
+        cdef int i, fd
+        cdef int count = self._pend_n
+        cdef unsigned long long t_req = 0
+        if count == 0:
+            return
+        if timing:
+            t_req = _now_ns()
+        self._run_batch(handler, count, t_req)
+        for i in range(count):
+            fd = self._pend_fd[i]
+            slab_free(self.pool, <int32_t>self._pend_slot[i])
+            if self._pend_res[i] < 0:
+                close(fd)
+                self.stat_closes += 1
+            else:
+                _arm_send(&self.ring, fd, self._conn_buf[fd],
+                          self._conn_len[fd], 0, enters)
+        self._pend_n = 0
+
+    cdef int _handle_locked(self, PyObject *handler, int fd,
+                            const char *req, int n) noexcept:
+        # The only GIL-held step of serve_forever_app: build the request bytes,
+        # call the handler, and copy its response into this connection's C
+        # buffer so the send can proceed with the GIL released. Returns 0 on
+        # success, -1 if the connection should be closed.
+        cdef char *src = NULL
+        cdef Py_ssize_t rlen = 0
+        cdef char *nb
+        self.stat_handler_calls += 1
+        try:
+            out = (<object>handler)(PyBytes_FromStringAndSize(req, n))
+            if not isinstance(out, bytes):
+                raise TypeError("handler must return bytes, got %s"
+                                % type(out).__name__)
+            PyBytes_AsStringAndSize(out, &src, &rlen)
+            if rlen <= 0 or rlen > MAX_RESPONSE_LEN:
+                raise ValueError("handler response must be 1..16777215 bytes")
+            if self._ensure_conn(fd) < 0:
+                raise MemoryError("connection table")
+            if <size_t>rlen > self._conn_cap[fd]:
+                nb = <char*>realloc(self._conn_buf[fd], rlen)
+                if nb == NULL:
+                    raise MemoryError("response buffer")
+                self._conn_buf[fd] = nb
+                self._conn_cap[fd] = rlen
+            memcpy(self._conn_buf[fd], src, rlen)
+            self._conn_len[fd] = rlen
+            return 0
+        except Exception:
+            # A failing handler closes that connection only. Report the first
+            # failure in full and count the rest (see get_stats()).
+            self.stat_handler_errors += 1
+            if self.stat_handler_errors == 1:
+                traceback.print_exc(file=sys.stderr)
+            return -1
+        except BaseException as exc:
+            # KeyboardInterrupt, SystemExit and the like are not handler
+            # failures: close this connection, stop the reactor, and let
+            # serve_forever_app() re-raise the exception to its caller. Without
+            # this branch the exception would be lost at the C boundary and the
+            # call would count as a success with no response prepared.
+            if self._pending_exc is None:
+                self._pending_exc = exc
+            self._stop = 1
+            return -1
+
+    cdef int _check_signals(self) noexcept with gil:
+        # The wait was interrupted by a signal. Python-level signal handlers
+        # only run when the interpreter gets control, so give it control here
+        # (this is a no-op off the main thread). Returns 0 to keep serving, -1
+        # if a handler raised (e.g. KeyboardInterrupt); _run() re-raises it.
+        try:
+            PyErr_CheckSignals()
+            return 0
+        except BaseException as exc:
+            self._pending_exc = exc
+            return -1
+
+    cdef int _serve(self, int listen_fd, PyObject *handler) noexcept nogil:
+        # Shared reactor loop. handler == NULL selects the canned-echo path.
+        # Returns 0 after stop() or when a signal handler raised, or a negative
+        # errno if the ring failed.
         cdef io_uring_cqe *cqe
-        cdef io_uring_sqe *sqe
-        cdef int ret
+        cdef int ret, rc
         cdef uint64_t ud
         cdef int op, fd, res
-        cdef int32_t slot_idx, new_slot
-        cdef void *buf
-        cdef char *dst
-        cdef size_t j
-        cdef char *resp = self._echo_resp
+        cdef size_t low, off, total
+        cdef bint timing = self._gil_timing
+        cdef unsigned long long t_req
+        cdef const char *base
+        cdef bint app = handler != NULL
+        cdef bint gil_batch = app and self._gil_batch
+        cdef const char *resp = self._echo_resp
         cdef size_t resp_len = self._echo_resp_len
+        cdef size_t slot_size = self.pool.slot_size
+        cdef unsigned max_batch = self._max_batch
+        cdef unsigned batch
+        cdef unsigned long long *enters = &self.stat_enters
 
-        if resp == NULL:
-            raise RuntimeError("call set_response() before serve_forever_echo()")
+        while self._stop == 0:
+            # The only system call of an iteration: submits everything queued
+            # while draining the previous batch, then waits for >= 1 completion.
+            ret = io_uring_submit_and_wait(&self.ring, 1)
+            self.stat_enters += 1
+            if ret < 0:
+                if ret == -EINTR:
+                    if self._check_signals() < 0:
+                        return 0
+                    continue
+                return ret
+            self.stat_waits += 1
+            batch = 0
+            while True:
+                if self._stop != 0:
+                    break  # stop() was called, or a handler raised BaseException
+                if max_batch != 0 and batch >= max_batch:
+                    break  # batch cap reached: go back through io_uring_enter
+                ret = io_uring_peek_cqe(&self.ring, &cqe)
+                if ret < 0 or cqe == NULL:
+                    break
+                batch += 1
+                ud = cqe.user_data
+                op = <int>(ud >> 56)
+                fd = <int>((ud >> 24) & <uint64_t>0xFFFFFFFF)
+                low = <size_t>(ud & <uint64_t>0xFFFFFF)
+                res = cqe.res
+                io_uring_cqe_seen(&self.ring, cqe)
+                self.stat_completions += 1
 
-        sqe = io_uring_get_sqe(&self.ring)
+                if op == 1:  # ACCEPT: re-arm, then start a recv on the new fd
+                    _arm_accept(&self.ring, listen_fd, enters)
+                    if res >= 0:
+                        _arm_recv(&self.ring, self.pool, res, enters)
+                elif op == 2:  # RECV: `low` is the slab slot holding the request
+                    if res <= 0:
+                        slab_free(self.pool, <int32_t>low)
+                        close(fd)
+                        self.stat_closes += 1
+                    elif gil_batch:
+                        # Defer: the handler runs with the rest of this batch.
+                        self._pend_fd[self._pend_n] = fd
+                        self._pend_slot[self._pend_n] = <int>low
+                        self._pend_res[self._pend_n] = res
+                        self._pend_n += 1
+                        if self._pend_n >= self._pend_cap:
+                            self._flush_pending(handler, timing, enters)
+                    elif app:
+                        t_req = 0
+                        if timing:
+                            t_req = _now_ns()
+                        rc = self._run_handler(
+                            handler, fd,
+                            <const char*>self.pool.raw_memory + low * slot_size,
+                            res, t_req)
+                        slab_free(self.pool, <int32_t>low)
+                        if rc < 0:
+                            close(fd)
+                            self.stat_closes += 1
+                        else:
+                            _arm_send(&self.ring, fd, self._conn_buf[fd],
+                                      self._conn_len[fd], 0, enters)
+                    else:
+                        slab_free(self.pool, <int32_t>low)
+                        _arm_send(&self.ring, fd, resp, resp_len, 0, enters)
+                elif op == 3:  # SEND: `low` is the offset this send started at
+                    if res <= 0:
+                        close(fd)
+                        self.stat_closes += 1
+                    else:
+                        off = low + <size_t>res
+                        if app:
+                            base = self._conn_buf[fd]
+                            total = self._conn_len[fd]
+                        else:
+                            base = resp
+                            total = resp_len
+                        if off < total:   # short send: resume
+                            _arm_send(&self.ring, fd, base, total, off, enters)
+                        else:             # done: re-arm keep-alive recv
+                            self.stat_requests += 1
+                            _arm_recv(&self.ring, self.pool, fd, enters)
+            if gil_batch:
+                self._flush_pending(handler, timing, enters)
+        return 0
+
+    cdef _run(self, int listen_fd, PyObject *handler):
+        cdef int ret
+        if self._serving:
+            raise RuntimeError("engine is already serving")
+        cdef io_uring_sqe *sqe = io_uring_get_sqe(&self.ring)
         if sqe == NULL:
             raise RuntimeError("Submission queue full at startup")
         io_uring_prep_accept(sqe, listen_fd, NULL, NULL, 0)
         sqe.user_data = (<uint64_t>1 << 56) | ((<uint64_t>(<uint32_t>listen_fd)) << 24)
         io_uring_submit(&self.ring)
 
-        with nogil:
-            while self._stop == 0:
-                ret = io_uring_submit_and_wait(&self.ring, 1)
-                if ret < 0:
-                    break
-                while True:
-                    ret = io_uring_peek_cqe(&self.ring, &cqe)
-                    if ret < 0 or cqe == NULL:
-                        break
-                    ud = cqe.user_data
-                    op = <int>(ud >> 56)
-                    fd = <int>((ud >> 24) & <uint64_t>0xFFFFFFFF)
-                    slot_idx = <int32_t>(ud & <uint64_t>0xFFFFFF)
-                    res = cqe.res
-                    io_uring_cqe_seen(&self.ring, cqe)
-                    self.stat_completions += 1
+        self._serving = 1
+        try:
+            with nogil:
+                ret = self._serve(listen_fd, handler)
+        finally:
+            self._serving = 0
+        if self._pending_exc is not None:
+            exc = self._pending_exc
+            self._pending_exc = None
+            raise exc
+        if ret < 0:
+            raise OSError(-ret, "io_uring_submit_and_wait failed")
 
-                    if op == 1:  # ACCEPT: re-arm, then start a recv on the new fd
-                        sqe = io_uring_get_sqe(&self.ring)
-                        if sqe != NULL:
-                            io_uring_prep_accept(sqe, listen_fd, NULL, NULL, 0)
-                            sqe.user_data = (<uint64_t>1 << 56) \
-                                | ((<uint64_t>(<uint32_t>listen_fd)) << 24)
-                        if res >= 0:
-                            buf = slab_alloc(self.pool, &new_slot)
-                            if buf != NULL:
-                                sqe = io_uring_get_sqe(&self.ring)
-                                if sqe != NULL:
-                                    io_uring_prep_recv(sqe, res, buf,
-                                                       self.pool.slot_size, 0)
-                                    sqe.user_data = (<uint64_t>2 << 56) \
-                                        | ((<uint64_t>(<uint32_t>res)) << 24) \
-                                        | (<uint64_t>(new_slot & 0xFFFFFF))
-                                else:
-                                    slab_free(self.pool, new_slot)
-                    elif op == 2:  # RECV: free the request slot, send the reply
-                        if slot_idx >= 0:
-                            slab_free(self.pool, slot_idx)
-                        if res <= 0:
-                            close(fd)
-                        else:
-                            buf = slab_alloc(self.pool, &new_slot)
-                            if buf != NULL:
-                                dst = <char*>buf
-                                for j in range(resp_len):
-                                    dst[j] = resp[j]
-                                sqe = io_uring_get_sqe(&self.ring)
-                                if sqe != NULL:
-                                    io_uring_prep_send(sqe, fd, buf, resp_len, 0)
-                                    sqe.user_data = (<uint64_t>3 << 56) \
-                                        | ((<uint64_t>(<uint32_t>fd)) << 24) \
-                                        | (<uint64_t>(new_slot & 0xFFFFFF))
-                                else:
-                                    slab_free(self.pool, new_slot)
-                    elif op == 3:  # SEND: free the reply slot, re-arm keep-alive recv
-                        if slot_idx >= 0:
-                            slab_free(self.pool, slot_idx)
-                        if res <= 0:
-                            close(fd)
-                        else:
-                            buf = slab_alloc(self.pool, &new_slot)
-                            if buf != NULL:
-                                sqe = io_uring_get_sqe(&self.ring)
-                                if sqe != NULL:
-                                    io_uring_prep_recv(sqe, fd, buf,
-                                                       self.pool.slot_size, 0)
-                                    sqe.user_data = (<uint64_t>2 << 56) \
-                                        | ((<uint64_t>(<uint32_t>fd)) << 24) \
-                                        | (<uint64_t>(new_slot & 0xFFFFFF))
-                                else:
-                                    slab_free(self.pool, new_slot)
-                self.stat_waits += 1
-                io_uring_submit(&self.ring)
+    def serve_forever_echo(self, int listen_fd):
+        # Serve the set_response() bytes to every request, entirely in C.
+        if self._echo_resp == NULL:
+            raise RuntimeError("call set_response() before serve_forever_echo()")
+        self._run(listen_fd, NULL)
+
+    def serve_forever_app(self, int listen_fd, handler):
+        # Serve handler(request_bytes) -> response_bytes. Accept/recv/send run
+        # in C with the GIL released; only the handler call itself holds it
+        # (once per request, or once per batch after set_gil_batching(True)).
+        if not callable(handler):
+            raise TypeError("handler must be callable")
+        # `handler` is kept alive by this frame for the whole serve call.
+        self._run(listen_fd, <PyObject*>handler)
 
     def get_events(self, int max_events=256, bint wait=True, bint copy_data=True,
                    bint as_view=False):

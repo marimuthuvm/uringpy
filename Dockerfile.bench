@@ -1,0 +1,65 @@
+# Benchmark image for the paper's measurements: CPython built from source, with
+# or without the GIL. Both variants come from this one recipe and differ only
+# in `--disable-gil`, so a GIL vs. free-threaded comparison is not also a
+# comparison of compilers, optimisation flags or base images.
+#
+#   docker build -f Dockerfile.bench -t uringpy:314 .
+#   docker build -f Dockerfile.bench --build-arg FREE_THREADED=1 -t uringpy:314t .
+#
+# Other versions: --build-arg PYVER=3.13.7
+# The build fails if the interpreter's GIL state is not the one asked for, or
+# if importing uringpy turns the GIL back on in the free-threaded variant.
+ARG PYVER=3.14.7
+
+FROM debian:bookworm-slim AS pybuild
+ARG PYVER
+ARG FREE_THREADED=0
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential curl ca-certificates \
+    libssl-dev zlib1g-dev libffi-dev libbz2-dev libreadline-dev \
+    libsqlite3-dev liblzma-dev \
+    && rm -rf /var/lib/apt/lists/*
+RUN curl -fsSL "https://www.python.org/ftp/python/${PYVER}/Python-${PYVER}.tgz" -o /tmp/py.tgz \
+    && tar -xzf /tmp/py.tgz -C /tmp
+RUN cd /tmp/Python-${PYVER} \
+    && if [ "${FREE_THREADED}" = "1" ]; then GILFLAG="--disable-gil"; else GILFLAG=""; fi \
+    && ./configure ${GILFLAG} --enable-optimizations --prefix=/opt/py \
+    && make -j"$(nproc)" && make altinstall
+# `make altinstall` installs python3.X (or python3.Xt); give it the plain name.
+RUN MM="$(echo "${PYVER}" | cut -d. -f1,2)" \
+    && if [ "${FREE_THREADED}" = "1" ]; then SFX="t"; else SFX=""; fi \
+    && ln -sf "/opt/py/bin/python${MM}${SFX}" /opt/py/bin/python3 \
+    && /opt/py/bin/python3 -c "import os, sysconfig; ft = bool(sysconfig.get_config_var('Py_GIL_DISABLED')); print('free-threaded build:', ft); assert ft == (os.environ['FREE_THREADED'] == '1')"
+
+FROM debian:bookworm-slim
+ARG FREE_THREADED=0
+ARG LIBURING=2.6
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc g++ make wrk curl ca-certificates \
+    libffi8 zlib1g \
+    && rm -rf /var/lib/apt/lists/*
+# bookworm's liburing predates io_uring_setup_buf_ring; build a recent one.
+RUN curl -fsSL "https://github.com/axboe/liburing/archive/refs/tags/liburing-${LIBURING}.tar.gz" -o /tmp/lu.tgz \
+    && tar -xzf /tmp/lu.tgz -C /tmp \
+    && cd /tmp/liburing-liburing-${LIBURING} \
+    && ./configure --prefix=/usr/local && make -j"$(nproc)" && make install \
+    && ldconfig
+COPY --from=pybuild /opt/py /opt/py
+ENV PATH=/opt/py/bin:$PATH
+WORKDIR /app
+COPY . /app
+RUN python3 -m pip install --no-cache-dir --upgrade pip setuptools wheel Cython pytest \
+    && python3 -m pip install --no-cache-dir -e .
+# uvloop is a baseline for the GIL build only: it is not free-threading-ready,
+# and importing it there would switch the GIL back on.
+RUN if [ "${FREE_THREADED}" != "1" ]; then \
+        python3 -m pip install --no-cache-dir uvloop || echo "[warn] uvloop not installed"; \
+    fi
+# The interpreter must be in the requested GIL state with uringpy loaded.
+RUN python3 -c "import os, sys, uringpy; g = getattr(sys, '_is_gil_enabled', lambda: True)(); print('python', sys.version.split()[0], 'gil_enabled', g); assert g == (os.environ['FREE_THREADED'] != '1')"
+# On the GIL build the interpreter's count of GIL hand-offs must be readable
+# (uringpy._gilstat is optional in setup.py, so a failed build would otherwise
+# go unnoticed), and importing it must not turn the GIL on elsewhere.
+RUN python3 -c "import os, sys; from uringpy import _gilstat; n = _gilstat.switch_count(); g = getattr(sys, '_is_gil_enabled', lambda: True)(); print('gil switch counter', n, 'gil_enabled', g); assert g == (os.environ['FREE_THREADED'] != '1'); assert isinstance(n, int) or not g"
+
+CMD ["pytest", "-q"]

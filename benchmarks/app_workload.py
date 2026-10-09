@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Realistic per-request work shared by the uringpy-app and asyncio-app servers.
+"""Per-request Python work shared by the uringpy-app and asyncio-app servers.
 
 Both engines call this identical handler, so the comparison isolates *where* the
-per-request Python work runs, not what it does. It parses the HTTP request line
-and computes a small path-dependent checksum -- representative of real routing /
-application logic, unlike the canned-echo path.
+per-request Python work runs, not what it does. The handler is deliberately
+small: it parses the HTTP request line and computes a checksum of the path. It
+stands in for "some interpreted code runs per request"; it is not a model of a
+real application. HANDLER_WORK scales its cost for the handler-cost sweep.
 """
 
 from __future__ import annotations
@@ -17,7 +18,12 @@ _HDR = (b"HTTP/1.1 200 OK\r\n"
         b"Content-Length: ")
 
 # Pad the response body to RESP_SIZE bytes (0 = natural size) for the size sweep.
-_PAD_TO = int(os.environ.get("RESP_SIZE", "0"))
+_PAD_TO = int(os.environ.get("RESP_SIZE") or 0)
+
+# HANDLER_WORK=<n> adds n iterations of pure-Python arithmetic to every request
+# (default 0). The handler-cost sweep uses it to vary how long each request
+# holds the GIL while everything else stays the same.
+_WORK = int(os.environ.get("HANDLER_WORK") or 0)
 
 
 def handle_request(data: bytes) -> bytes:
@@ -35,3 +41,17 @@ def handle_request(data: bytes) -> bytes:
     if _PAD_TO and len(body) < _PAD_TO:
         body += b" " * (_PAD_TO - len(body))
     return _HDR + str(len(body)).encode() + b"\r\n\r\n" + body
+
+
+def _handle_request_with_work(data: bytes) -> bytes:
+    """handle_request plus _WORK extra iterations of interpreted arithmetic."""
+    acc = 0
+    for i in range(_WORK):
+        acc = (acc * 131 + i) & 0xFFFFFFFF
+    return _base_handle_request(data)
+
+
+# With HANDLER_WORK unset the handler is exactly the function above, untouched.
+_base_handle_request = handle_request
+if _WORK > 0:
+    handle_request = _handle_request_with_work

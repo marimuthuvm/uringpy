@@ -1,0 +1,11 @@
+# Control for the handler sweep: benchmarks/handler_thread_control.py (run as
+# the equivalent inline script) inside each image on the server VM
+# (t2d-standard-4), HANDLER_WORK=300, 20000 calls per thread, 2026-10-07.
+== uringpy:314tr
+1 threads: us per call 33.7  calls per s 29657
+2 threads: us per call 46.5  calls per s 42499
+4 threads: us per call 130.4  calls per s 30283
+== uringpy:314r
+1 threads: us per call 30.1  calls per s 33182
+2 threads: us per call 60.7  calls per s 32717
+4 threads: us per call 112.2  calls per s 32531

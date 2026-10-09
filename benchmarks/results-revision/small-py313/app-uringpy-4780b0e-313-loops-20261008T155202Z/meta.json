@@ -1,0 +1,182 @@
+{
+  "experiment": "app",
+  "started_utc": "2026-10-08T15:52:02+00:00",
+  "params": {
+    "reps": 5,
+    "duration": 20,
+    "warmup": 5,
+    "conns": 400,
+    "threads": 8,
+    "seed": 1698872874,
+    "port": 8080,
+    "url": "http://10.142.0.2:8080/",
+    "docker_opts": "--ulimit nofile=65536:65536 --ulimit memlock=-1:-1"
+  },
+  "cells": [
+    [
+      "asyncio-proto-app",
+      "thread",
+      1,
+      13,
+      0,
+      0,
+      400
+    ],
+    [
+      "asyncio-proto-app",
+      "thread",
+      4,
+      13,
+      0,
+      0,
+      400
+    ],
+    [
+      "asyncio-proto-app",
+      "process",
+      1,
+      13,
+      0,
+      0,
+      400
+    ],
+    [
+      "asyncio-proto-app",
+      "process",
+      4,
+      13,
+      0,
+      0,
+      400
+    ],
+    [
+      "uvloop-proto-app",
+      "thread",
+      1,
+      13,
+      0,
+      0,
+      400
+    ],
+    [
+      "uvloop-proto-app",
+      "thread",
+      4,
+      13,
+      0,
+      0,
+      400
+    ],
+    [
+      "uvloop-proto-app",
+      "process",
+      1,
+      13,
+      0,
+      0,
+      400
+    ],
+    [
+      "uvloop-proto-app",
+      "process",
+      4,
+      13,
+      0,
+      0,
+      400
+    ],
+    [
+      "uringpy-app",
+      "thread",
+      1,
+      13,
+      0,
+      0,
+      400
+    ],
+    [
+      "uringpy-app",
+      "thread",
+      4,
+      13,
+      0,
+      0,
+      400
+    ],
+    [
+      "uringpy-app",
+      "process",
+      1,
+      13,
+      0,
+      0,
+      400
+    ],
+    [
+      "uringpy-app",
+      "process",
+      4,
+      13,
+      0,
+      0,
+      400
+    ],
+    [
+      "uringpy-app-batch",
+      "thread",
+      1,
+      13,
+      0,
+      0,
+      400
+    ],
+    [
+      "uringpy-app-batch",
+      "thread",
+      4,
+      13,
+      0,
+      0,
+      400
+    ],
+    [
+      "uringpy-app-batch",
+      "process",
+      1,
+      13,
+      0,
+      0,
+      400
+    ],
+    [
+      "uringpy-app-batch",
+      "process",
+      4,
+      13,
+      0,
+      0,
+      400
+    ]
+  ],
+  "client": {
+    "kernel": "7.0.0-1013-gcp",
+    "nproc": 8,
+    "python": "3.12.3",
+    "cpu_model": "AMD EPYC 7B13",
+    "machine_type": "t2d-standard-8",
+    "wrk": "wrk debian/4.1.0-4build2 [epoll] Copyright (C) 2012 Will Glozer",
+    "git_commit": "4780b0e62531ee4054eb45cc74fd585149b06e74",
+    "git_dirty": false
+  },
+  "server": {
+    "target": "marimuthu_vm@10.142.0.2",
+    "image": "uringpy:4780b0e-313-loops",
+    "kernel": "7.0.0-1013-gcp",
+    "nproc": "4",
+    "cpu_model": "AMD EPYC 7B13",
+    "machine_type": "t2d-standard-4",
+    "image_id": "sha256:92e10132a38c91292bd05212ecf08b6eef6bf4d9e3d74847ffd6aa57f8a71f9c",
+    "interpreter": "3.13.7 gil_on"
+  },
+  "finished_utc": "2026-10-08T16:28:06+00:00"
+}

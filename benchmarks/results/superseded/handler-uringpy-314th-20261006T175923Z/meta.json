@@ -1,0 +1,181 @@
+{
+  "experiment": "handler",
+  "started_utc": "2026-10-06T17:59:23+00:00",
+  "params": {
+    "reps": 5,
+    "duration": 20,
+    "warmup": 5,
+    "conns": 400,
+    "threads": 8,
+    "seed": 2127826692,
+    "port": 8080,
+    "url": "http://10.142.0.2:8080/"
+  },
+  "cells": [
+    [
+      "uringpy-app",
+      "thread",
+      1,
+      13,
+      0,
+      0
+    ],
+    [
+      "uringpy-app",
+      "thread",
+      1,
+      13,
+      0,
+      30
+    ],
+    [
+      "uringpy-app",
+      "thread",
+      1,
+      13,
+      0,
+      100
+    ],
+    [
+      "uringpy-app",
+      "thread",
+      1,
+      13,
+      0,
+      300
+    ],
+    [
+      "uringpy-app",
+      "thread",
+      1,
+      13,
+      0,
+      1000
+    ],
+    [
+      "uringpy-app",
+      "thread",
+      1,
+      13,
+      0,
+      3000
+    ],
+    [
+      "uringpy-app",
+      "thread",
+      2,
+      13,
+      0,
+      0
+    ],
+    [
+      "uringpy-app",
+      "thread",
+      2,
+      13,
+      0,
+      30
+    ],
+    [
+      "uringpy-app",
+      "thread",
+      2,
+      13,
+      0,
+      100
+    ],
+    [
+      "uringpy-app",
+      "thread",
+      2,
+      13,
+      0,
+      300
+    ],
+    [
+      "uringpy-app",
+      "thread",
+      2,
+      13,
+      0,
+      1000
+    ],
+    [
+      "uringpy-app",
+      "thread",
+      2,
+      13,
+      0,
+      3000
+    ],
+    [
+      "uringpy-app",
+      "thread",
+      4,
+      13,
+      0,
+      0
+    ],
+    [
+      "uringpy-app",
+      "thread",
+      4,
+      13,
+      0,
+      30
+    ],
+    [
+      "uringpy-app",
+      "thread",
+      4,
+      13,
+      0,
+      100
+    ],
+    [
+      "uringpy-app",
+      "thread",
+      4,
+      13,
+      0,
+      300
+    ],
+    [
+      "uringpy-app",
+      "thread",
+      4,
+      13,
+      0,
+      1000
+    ],
+    [
+      "uringpy-app",
+      "thread",
+      4,
+      13,
+      0,
+      3000
+    ]
+  ],
+  "client": {
+    "kernel": "7.0.0-1011-gcp",
+    "nproc": 8,
+    "python": "3.12.3",
+    "cpu_model": "AMD EPYC 7B13",
+    "machine_type": "t2d-standard-8",
+    "wrk": "wrk debian/4.1.0-4build2 [epoll] Copyright (C) 2012 Will Glozer",
+    "git_commit": "5b28fd14c33a5f072f1662cff2e3eaa0e3d39060",
+    "git_dirty": false
+  },
+  "server": {
+    "target": "marimuthu_vm@10.142.0.2",
+    "image": "uringpy:314th",
+    "kernel": "7.0.0-1011-gcp",
+    "nproc": "4",
+    "cpu_model": "AMD EPYC 7B13",
+    "machine_type": "t2d-standard-4",
+    "image_id": "sha256:7894a7383a1b820d8df4ebe934c6220faf34ee9ac29f607595d8da2bf5a2216b",
+    "interpreter": "3.14.7 gil_OFF"
+  },
+  "finished_utc": "2026-10-06T18:40:04+00:00"
+}

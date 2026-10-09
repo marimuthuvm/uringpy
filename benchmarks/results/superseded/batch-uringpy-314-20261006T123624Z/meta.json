@@ -1,0 +1,79 @@
+{
+  "experiment": "batch",
+  "started_utc": "2026-10-06T12:36:24+00:00",
+  "params": {
+    "reps": 5,
+    "duration": 20,
+    "warmup": 5,
+    "conns": 400,
+    "threads": 8,
+    "seed": 1111285435,
+    "port": 8080,
+    "url": "http://10.142.0.2:8080/"
+  },
+  "cells": [
+    [
+      "uringpy",
+      "thread",
+      1,
+      13,
+      1
+    ],
+    [
+      "uringpy",
+      "thread",
+      1,
+      13,
+      4
+    ],
+    [
+      "uringpy",
+      "thread",
+      1,
+      13,
+      16
+    ],
+    [
+      "uringpy",
+      "thread",
+      1,
+      13,
+      64
+    ],
+    [
+      "uringpy",
+      "thread",
+      1,
+      13,
+      256
+    ],
+    [
+      "uringpy",
+      "thread",
+      1,
+      13,
+      0
+    ]
+  ],
+  "client": {
+    "kernel": "7.0.0-1011-gcp",
+    "nproc": 8,
+    "python": "3.12.3",
+    "cpu_model": "AMD EPYC 7B13",
+    "machine_type": "t2d-standard-8",
+    "wrk": "wrk debian/4.1.0-4build2 [epoll] Copyright (C) 2012 Will Glozer",
+    "git_commit": "b60fe241bf1d2d25b5daaca772f4801477838ba4",
+    "git_dirty": false
+  },
+  "server": {
+    "target": "marimuthu_vm@10.142.0.2",
+    "image": "uringpy:314",
+    "kernel": "7.0.0-1011-gcp",
+    "nproc": "4",
+    "cpu_model": "AMD EPYC 7B13",
+    "machine_type": "t2d-standard-4",
+    "image_id": "sha256:446f9f262d4f244f57f235670e1d124211f862dfbdac7448599265510605cc33",
+    "interpreter": "3.14.7 gil_on"
+  },
+  "finished_utc": "2026-10-06T12:49:54+00:00"
+}

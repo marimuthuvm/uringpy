@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
-# Two-node scaling benchmark (the publication-grade, isolated figure).
+# Two-node scaling benchmark -- quick single-pass look.
+#
+# For numbers that go into the paper use benchmarks/bench_matrix.py instead: it
+# repeats every cell, interleaves the repetitions, and reports means with 95%
+# confidence intervals, latency and CPU use on both machines.
 #
 # Run this ON THE CLIENT VM. It drives the server VM over SSH -- starting a fresh
 # server container per cell, generating load locally with wrk, then stopping the
@@ -16,6 +20,9 @@
 #   FT=1        use the free-threaded image (uringpy:gil-ft) unless IMAGE is set
 #   IMAGE (uringpy:gil) PORT (8080) DURATION (20) CONNS (400) THREADS (nproc)
 #   WORKERS ("1 2 4") ENGINES ("uringpy asyncio") MODES ("thread process")
+#   RESP_SIZE (13)  response body bytes, honoured by every engine
+# Application-handler workload (a small Python handler per request):
+#   ENGINES="uringpy-app asyncio-app" SERVER=... SERVER_IP=... bash benchmarks/twonode_bench.sh
 set -u
 
 : "${SERVER:?set SERVER=user@server-host}"

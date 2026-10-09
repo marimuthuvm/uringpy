@@ -11,6 +11,9 @@ from Cython.Build import cythonize
 
 setup(
     name="gilprobe",
+    # No Python packages: stops setuptools scanning the repository root.
+    packages=[],
+    py_modules=[],
     ext_modules=cythonize(
         [Extension("gilprobe", sources=["benchmarks/gilprobe.pyx"],
                    extra_compile_args=["-O3"])],

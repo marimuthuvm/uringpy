@@ -1,4 +1,5 @@
 from .engine import URingEngine
+from .epoll import BatchIO, EpollEngine
 
 __version__ = "0.1.0"
-__all__ = ["URingEngine"]
+__all__ = ["URingEngine", "EpollEngine", "BatchIO"]

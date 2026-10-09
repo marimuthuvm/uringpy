@@ -1,0 +1,202 @@
+{
+  "experiment": "app",
+  "started_utc": "2026-10-08T23:42:40+00:00",
+  "params": {
+    "reps": 5,
+    "duration": 20,
+    "warmup": 5,
+    "conns": 400,
+    "threads": 8,
+    "seed": 428379290,
+    "port": 8080,
+    "url": "http://10.142.0.2:8080/",
+    "docker_opts": "--ulimit nofile=65536:65536",
+    "rates": [],
+    "wrk": "wrk"
+  },
+  "cells": [
+    [
+      "uringpy",
+      "thread",
+      1,
+      13,
+      0,
+      0,
+      400
+    ],
+    [
+      "uringpy",
+      "thread",
+      3,
+      13,
+      0,
+      0,
+      400
+    ],
+    [
+      "uringpy",
+      "process",
+      3,
+      13,
+      0,
+      0,
+      400
+    ],
+    [
+      "py-epoll",
+      "thread",
+      1,
+      13,
+      0,
+      0,
+      400
+    ],
+    [
+      "py-epoll",
+      "thread",
+      3,
+      13,
+      0,
+      0,
+      400
+    ],
+    [
+      "py-epoll",
+      "process",
+      3,
+      13,
+      0,
+      0,
+      400
+    ],
+    [
+      "uringpy-app",
+      "thread",
+      1,
+      13,
+      0,
+      0,
+      400
+    ],
+    [
+      "uringpy-app",
+      "thread",
+      3,
+      13,
+      0,
+      0,
+      400
+    ],
+    [
+      "uringpy-app",
+      "process",
+      3,
+      13,
+      0,
+      0,
+      400
+    ],
+    [
+      "uringpy-app-batch",
+      "thread",
+      1,
+      13,
+      0,
+      0,
+      400
+    ],
+    [
+      "uringpy-app-batch",
+      "thread",
+      3,
+      13,
+      0,
+      0,
+      400
+    ],
+    [
+      "uringpy-app-batch",
+      "process",
+      3,
+      13,
+      0,
+      0,
+      400
+    ],
+    [
+      "c-epoll-app",
+      "thread",
+      1,
+      13,
+      0,
+      0,
+      400
+    ],
+    [
+      "c-epoll-app",
+      "thread",
+      3,
+      13,
+      0,
+      0,
+      400
+    ],
+    [
+      "c-epoll-app",
+      "process",
+      3,
+      13,
+      0,
+      0,
+      400
+    ],
+    [
+      "c-epoll-app-batch",
+      "thread",
+      1,
+      13,
+      0,
+      0,
+      400
+    ],
+    [
+      "c-epoll-app-batch",
+      "thread",
+      3,
+      13,
+      0,
+      0,
+      400
+    ],
+    [
+      "c-epoll-app-batch",
+      "process",
+      3,
+      13,
+      0,
+      0,
+      400
+    ]
+  ],
+  "client": {
+    "kernel": "7.0.0-1013-gcp",
+    "nproc": 8,
+    "python": "3.12.3",
+    "cpu_model": "AMD EPYC 7B13",
+    "machine_type": "t2d-standard-8",
+    "wrk": "wrk debian/4.1.0-4build2 [epoll] Copyright (C) 2012 Will Glozer",
+    "git_commit": "bf38f8fdad0e5a50bcd056460be4178ae38ebd5d",
+    "git_dirty": false
+  },
+  "server": {
+    "target": "marimuthu_vm@10.142.0.2",
+    "image": "uringpy:bf38f8f",
+    "kernel": "7.0.0-1013-gcp",
+    "nproc": "3",
+    "cpu_model": "AMD EPYC 7B13",
+    "machine_type": "t2d-standard-4",
+    "image_id": "sha256:bee5b42c52990cf9ffed0a05c88904d5160a76f1f50041b4f9422e426318641a",
+    "interpreter": "3.14.7 gil_on"
+  },
+  "finished_utc": "2026-10-09T00:23:30+00:00"
+}

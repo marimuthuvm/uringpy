@@ -1,0 +1,227 @@
+{
+  "experiment": "app",
+  "started_utc": "2026-10-08T12:20:37+00:00",
+  "params": {
+    "reps": 5,
+    "duration": 20,
+    "warmup": 5,
+    "conns": 400,
+    "threads": 8,
+    "seed": 150783310,
+    "port": 8080,
+    "url": "http://10.142.0.2:8080/",
+    "docker_opts": ""
+  },
+  "cells": [
+    [
+      "uringpy-app",
+      "thread",
+      1,
+      13,
+      0,
+      0,
+      400
+    ],
+    [
+      "uringpy-app",
+      "thread",
+      2,
+      13,
+      0,
+      0,
+      400
+    ],
+    [
+      "uringpy-app",
+      "thread",
+      4,
+      13,
+      0,
+      0,
+      400
+    ],
+    [
+      "uringpy-app-batch",
+      "thread",
+      1,
+      13,
+      0,
+      0,
+      400
+    ],
+    [
+      "uringpy-app-batch",
+      "thread",
+      2,
+      13,
+      0,
+      0,
+      400
+    ],
+    [
+      "uringpy-app-batch",
+      "thread",
+      4,
+      13,
+      0,
+      0,
+      400
+    ],
+    [
+      "c-epoll-app",
+      "thread",
+      1,
+      13,
+      0,
+      0,
+      400
+    ],
+    [
+      "c-epoll-app",
+      "thread",
+      2,
+      13,
+      0,
+      0,
+      400
+    ],
+    [
+      "c-epoll-app",
+      "thread",
+      4,
+      13,
+      0,
+      0,
+      400
+    ],
+    [
+      "c-epoll-app-batch",
+      "thread",
+      1,
+      13,
+      0,
+      0,
+      400
+    ],
+    [
+      "c-epoll-app-batch",
+      "thread",
+      2,
+      13,
+      0,
+      0,
+      400
+    ],
+    [
+      "c-epoll-app-batch",
+      "thread",
+      4,
+      13,
+      0,
+      0,
+      400
+    ],
+    [
+      "asyncio-app",
+      "thread",
+      1,
+      13,
+      0,
+      0,
+      400
+    ],
+    [
+      "asyncio-app",
+      "thread",
+      2,
+      13,
+      0,
+      0,
+      400
+    ],
+    [
+      "asyncio-app",
+      "thread",
+      4,
+      13,
+      0,
+      0,
+      400
+    ],
+    [
+      "asyncio-proto-app",
+      "thread",
+      1,
+      13,
+      0,
+      0,
+      400
+    ],
+    [
+      "asyncio-proto-app",
+      "thread",
+      2,
+      13,
+      0,
+      0,
+      400
+    ],
+    [
+      "asyncio-proto-app",
+      "thread",
+      4,
+      13,
+      0,
+      0,
+      400
+    ],
+    [
+      "uvloop-proto-app",
+      "thread",
+      1,
+      13,
+      0,
+      0,
+      400
+    ],
+    [
+      "uvloop-proto-app",
+      "thread",
+      2,
+      13,
+      0,
+      0,
+      400
+    ],
+    [
+      "uvloop-proto-app",
+      "thread",
+      4,
+      13,
+      0,
+      0,
+      400
+    ]
+  ],
+  "client": {
+    "kernel": "7.0.0-1013-gcp",
+    "nproc": 8,
+    "python": "3.12.3",
+    "cpu_model": "AMD EPYC 7B13",
+    "machine_type": "t2d-standard-8",
+    "wrk": "wrk debian/4.1.0-4build2 [epoll] Copyright (C) 2012 Will Glozer",
+    "git_commit": "4780b0e62531ee4054eb45cc74fd585149b06e74",
+    "git_dirty": false
+  },
+  "server": {
+    "target": "marimuthu_vm@10.142.0.2",
+    "image": "uringpy:4780b0e",
+    "kernel": "7.0.0-1013-gcp",
+    "nproc": "4",
+    "cpu_model": "AMD EPYC 7B13",
+    "machine_type": "t2d-standard-4",
+    "image_id": "sha256:cdd3f9fb014837f857d00e711d348010455de086ef12f2807997fd452ef734bd",
+    "interpreter": "3.14.7 gil_on"
+  },
+  "finished_utc": "2026-10-08T13:07:37+00:00"
+}

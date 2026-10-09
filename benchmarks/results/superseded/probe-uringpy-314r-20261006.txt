@@ -1,0 +1,15 @@
+# GIL-contention vs. syscall-count experiment
+- python: 3.14.7   cpus: 4
+- params: ops/event=8 Kmax=3 reps=20 target=0.25s
+- calibrated events: python=232,012  C/nogil=25,005,806 (each design sized to ~0.25s at rest)
+- raw GIL release/acquire round-trip: 46.8 ns
+
+| K contenders | Python loop: mean s (sd) | slowdown | min-based | C/nogil: mean s (sd) | slowdown | min-based |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 0 | 0.251 (0.001) | 1.00x | 1.00x | 0.2497 (0.0002) | 1.00x | 1.00x |
+| 1 | 0.512 (0.003) | 2.04x | 2.03x | 0.2550 (0.0002) | 1.02x | 1.02x |
+| 2 | 0.866 (0.278) | 3.46x | 2.09x | 0.4129 (0.1657) | 1.65x | 1.00x |
+| 3 | 1.137 (0.588) | 4.54x | 2.17x | 0.3941 (0.0863) | 1.58x | 1.03x |
+
+Contention slowdown at K=3 (means): Python loop 4.54x, C/nogil 1.58x.
+RESULT: GIL contention did not separate the two loops here.
