@@ -99,7 +99,8 @@ def tab_observed(data):
         "in Python) or acquisitions (C reactors) counted by the engine, an upper limit on "
         "hand-offs; voluntary context switches of the server process (c.sw.); and "
         "$g$, the number of times the GIL was taken by a thread other than its previous "
-        "holder, read from CPython's own counter.",
+        "holder, read from CPython's own counter. The middle group, including "
+        "\\code{asyncio} and \\code{uvloop}, runs the one-microsecond handler.",
         "tab:observed", "@{}lrrrrrr@{}",
         ["Configuration & $\\bar{x}_1$ & $\\bar{x}_4$ & $S_4$ & $\\hat{g}$ & c.sw. & $g$ \\\\"],
         body, colsep="4pt",
@@ -206,7 +207,8 @@ def tab_openloop(summary, configs=OPENLOOP):
         "for coordinated omission) to four workers with the default handler on the "
         f"four-core server, 400 connections, runs of 30~s ({n}). Median and 99th-percentile "
         "latency in ms (means over repetitions), and the highest rate each configuration "
-        "delivered.",
+        "delivered. The batched reactor takes the GIL once for all requests found in a pass "
+        "(no cap).",
         "tab:openloop", "@{}r" + "rr" * len(configs) + "@{}", [head1, head2], body,
         colsep="4pt" if len(configs) > 4 else "5pt",
         note=("$^{*}$ In italics: the configuration delivered less than 95\\% of the "
@@ -246,27 +248,28 @@ def tab_cores(cc):
         for k in ks:
             c = cc.get((k, engine))
             if c is None:
-                row += [mt.DASH] * 3
+                row += [mt.DASH] * 4
                 continue
             c1, t, p = c
             used += [c1, t, p]
-            row += [mt.ratio_pm(t, c1).split(" ")[0], mt.ratio_pm(t, p).split(" ")[0],
-                    fmt(t.csw)]
+            row += [f"{t.mean / 1e3:.1f}", mt.ratio_pm(t, c1).split(" ")[0],
+                    mt.ratio_pm(t, p).split(" ")[0], fmt(t.csw)]
         body.append(" & ".join(row) + " \\\\")
         if engine in ("uringpy", "py-epoll", "uringpy-app"):
             body.append("\\midrule")
-    head1 = (" & ".join([""] + [f"\\multicolumn{{3}}{{c}}{{{k} CPUs}}" for k in ks]) + " \\\\ "
-             + " ".join(f"\\cmidrule(lr){{{2 + 3 * i}-{4 + 3 * i}}}" for i in range(len(ks))))
-    head2 = " & ".join(["Configuration"] + ["$S_k$ & T/P & c.sw."] * len(ks)) + " \\\\"
+    head1 = (" & ".join([""] + [f"\\multicolumn{{4}}{{c}}{{{k} CPUs}}" for k in ks]) + " \\\\ "
+             + " ".join(f"\\cmidrule(lr){{{2 + 4 * i}-{5 + 4 * i}}}" for i in range(len(ks))))
+    head2 = " & ".join(["Configuration"] + ["$\\bar{x}_k$ & $S_k$ & T/P & c.sw."] * len(ks)) + " \\\\"
     return mt.table(
         "table*",
         "The four-core server with 2, 3 and 4 of its CPUs online (the others taken offline, "
         "so the kernel's network processing has the same CPUs), $k$ worker threads or "
-        f"processes for $k$ CPUs, 400 connections ({mt.run_count(used)}). $S_k$: throughput "
+        f"processes for $k$ CPUs, 400 connections ({mt.run_count(used)}). $\\bar{{x}}_k$: "
+        "throughput of $k$ threads in thousands of requests per second; $S_k$: throughput "
         "of $k$ threads over one thread on the same CPUs; T/P: $k$ threads over $k$ processes "
         "of the same design; c.sw.: voluntary context switches of the server process per "
         "request at $k$ threads.",
-        "tab:cores", "@{}l" + "rrr" * len(ks) + "@{}", [head1, head2], body, colsep="4pt")
+        "tab:cores", "@{}l" + "rrrr" * len(ks) + "@{}", [head1, head2], body, colsep="3pt")
 
 
 # --------------------------------------------------------------------------

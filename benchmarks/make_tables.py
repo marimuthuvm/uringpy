@@ -653,7 +653,7 @@ def tab_app(d):
                      "divided by the request count of the client, scaled from the measured "
                      "interval to the life of the server.")
     if dagger:
-        notes.append("$^\\dagger$ A configuration in this row had a coefficient of variation "
+        notes.append("$^\\dagger$ A configuration behind this cell had a coefficient of variation "
                      "above 5\\%.")
     return table(
         "table*",
@@ -706,7 +706,7 @@ def tab_gilbatch(d):
         "tab:gilbatch", "@{}rrrrrrrrrr@{}",
         ["Cap & $\\hat{g}$ & $\\bar{x}_1$ & $\\bar{x}_4$ & $S_2$ & $S_4$ & $t_{p,4}$ & $w_4$ "
          "& $U_4$ & c.sw. \\\\"], body, colsep="4pt",
-        note=("$^\\dagger$ A configuration in this ratio had a coefficient of variation above "
+        note=("$^\\dagger$ A configuration behind this cell had a coefficient of variation above "
               "5\\%." if dagger else None))
 
 
@@ -734,7 +734,7 @@ def tab_load(d):
                 fnum(c4.mean / 1e3 if c4 and c4.n else None, 1)
                 + ("$^{\\ddagger}$" if c4 is not None and c4.errors else ""),
                 ratio_pm(c4, c1) + _flagged(c4, c1),
-                DASH if c4 is None else "0" if c4.handoffs == 0 else fnum(c4.handoffs, 2),
+                DASH if c4 is None else "0" if c4.handoffs == 0 else fnum(c4.handoffs, 3),
                 fnum(c4.csw if c4 else None, 2)]) + " \\\\")
     dagger = any("^\\dagger" in line for line in body)  # not \ddagger
     left_out = sum(f.get("excluded", 0) for f in d.folders if f["experiment"] == "load")
@@ -751,7 +751,7 @@ def tab_load(d):
                      "exceeded the server's limit on open files "
                      "(Section~\\ref{sec:threats}).")
     if dagger:
-        notes.append("$^\\dagger$ A configuration in this ratio had a coefficient of variation "
+        notes.append("$^\\dagger$ A configuration behind this cell had a coefficient of variation "
                      "above 5\\%.")
     if any("ddagger" in line for line in body):
         worst = max((_num(r, "socket_errors") / _num(r, "requests")
@@ -768,7 +768,7 @@ def tab_load(d):
         "(c.sw.).",
         "tab:load", "@{}lrrrrrr@{}",
         ["Engine & Conn. & $\\bar{x}_1$ & $\\bar{x}_4$ & $S_4$ & $\\hat{g}$ & c.sw. \\\\"], body,
-        colsep="2.5pt", note=" ".join(notes) or None)
+        colsep="2pt", note=" ".join(notes) or None)
 
 
 LOOP_ENGINES = [("asyncio", "\\code{epoll} (selector loop)"), ("uvloop", "libuv"),
@@ -813,7 +813,7 @@ def tab_loops(d):
         body, colsep="4pt",
         note=("Measured in a supplementary run, with the container's limits on open files "
               "and on locked memory raised."
-              + (" $^\\dagger$ A configuration in this ratio had a coefficient of variation "
+              + (" $^\\dagger$ A configuration behind this cell had a coefficient of variation "
                  "above 5\\%." if dagger else "")))
 
 
@@ -950,7 +950,7 @@ def tab_handler(d):
               + (" The rows without $S_2$ were measured in the supplementary run, at one and "
                  "four workers." if any(line.split(" & ")[6:7] == [DASH] for line in body)
                  else "")
-              + (" $^\\dagger$ A configuration in this ratio had a coefficient of variation "
+              + (" $^\\dagger$ A configuration behind this cell had a coefficient of variation "
                  "above 5\\%." if dagger else "")
               + (" $^{\\ddagger}$ Runs behind this cell reported socket errors (at most "
                  f"{meta_sockerr_max(used):.2f}\\% of a run's requests)."
