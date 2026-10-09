@@ -1,0 +1,83 @@
+{
+  "experiment": "openloop",
+  "started_utc": "2026-10-08T18:19:24+00:00",
+  "params": {
+    "reps": 5,
+    "duration": 30,
+    "warmup": 5,
+    "conns": 400,
+    "threads": 8,
+    "seed": 198216527,
+    "port": 8080,
+    "url": "http://10.142.0.2:8080/",
+    "docker_opts": "--ulimit nofile=65536:65536",
+    "rates": [
+      50000,
+      100000,
+      150000,
+      200000,
+      300000,
+      400000
+    ],
+    "wrk": "/home/marimuthu_vm/wrk2/wrk"
+  },
+  "cells": [
+    [
+      "uringpy-app",
+      "thread",
+      4,
+      13,
+      0,
+      0,
+      400
+    ],
+    [
+      "uringpy-app-batch",
+      "thread",
+      4,
+      13,
+      0,
+      0,
+      400
+    ],
+    [
+      "uringpy-app-batch",
+      "process",
+      4,
+      13,
+      0,
+      0,
+      400
+    ],
+    [
+      "uvloop-proto-app",
+      "process",
+      4,
+      13,
+      0,
+      0,
+      400
+    ]
+  ],
+  "client": {
+    "kernel": "7.0.0-1013-gcp",
+    "nproc": 8,
+    "python": "3.12.3",
+    "cpu_model": "AMD EPYC 7B13",
+    "machine_type": "t2d-standard-8",
+    "wrk": "wrk 4.0.0 [epoll] Copyright (C) 2012 Will Glozer",
+    "git_commit": "58e3cdc0d1a3438c51b0cbfefe91889da0297507",
+    "git_dirty": false
+  },
+  "server": {
+    "target": "marimuthu_vm@10.142.0.2",
+    "image": "uringpy:58e3cdc",
+    "kernel": "7.0.0-1013-gcp",
+    "nproc": "4",
+    "cpu_model": "AMD EPYC 7B13",
+    "machine_type": "t2d-standard-4",
+    "image_id": "sha256:087df84450dc054616fce3e13033e94ecec6502c9e35252341f7b21c534aac7f",
+    "interpreter": "3.14.7 gil_on"
+  },
+  "finished_utc": "2026-10-08T19:33:32+00:00"
+}

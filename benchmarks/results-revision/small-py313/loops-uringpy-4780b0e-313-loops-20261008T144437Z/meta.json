@@ -1,0 +1,308 @@
+{
+  "experiment": "loops",
+  "started_utc": "2026-10-08T14:44:37+00:00",
+  "params": {
+    "reps": 5,
+    "duration": 20,
+    "warmup": 5,
+    "conns": 400,
+    "threads": 8,
+    "seed": 1307436009,
+    "port": 8080,
+    "url": "http://10.142.0.2:8080/",
+    "docker_opts": "--ulimit nofile=65536:65536 --ulimit memlock=-1:-1"
+  },
+  "cells": [
+    [
+      "asyncio",
+      "thread",
+      1,
+      13,
+      0,
+      0,
+      400
+    ],
+    [
+      "asyncio",
+      "thread",
+      2,
+      13,
+      0,
+      0,
+      400
+    ],
+    [
+      "asyncio",
+      "thread",
+      4,
+      13,
+      0,
+      0,
+      400
+    ],
+    [
+      "asyncio",
+      "process",
+      1,
+      13,
+      0,
+      0,
+      400
+    ],
+    [
+      "asyncio",
+      "process",
+      2,
+      13,
+      0,
+      0,
+      400
+    ],
+    [
+      "asyncio",
+      "process",
+      4,
+      13,
+      0,
+      0,
+      400
+    ],
+    [
+      "asyncio-proto",
+      "thread",
+      1,
+      13,
+      0,
+      0,
+      400
+    ],
+    [
+      "asyncio-proto",
+      "thread",
+      2,
+      13,
+      0,
+      0,
+      400
+    ],
+    [
+      "asyncio-proto",
+      "thread",
+      4,
+      13,
+      0,
+      0,
+      400
+    ],
+    [
+      "asyncio-proto",
+      "process",
+      1,
+      13,
+      0,
+      0,
+      400
+    ],
+    [
+      "asyncio-proto",
+      "process",
+      2,
+      13,
+      0,
+      0,
+      400
+    ],
+    [
+      "asyncio-proto",
+      "process",
+      4,
+      13,
+      0,
+      0,
+      400
+    ],
+    [
+      "uvloop",
+      "thread",
+      1,
+      13,
+      0,
+      0,
+      400
+    ],
+    [
+      "uvloop",
+      "thread",
+      2,
+      13,
+      0,
+      0,
+      400
+    ],
+    [
+      "uvloop",
+      "thread",
+      4,
+      13,
+      0,
+      0,
+      400
+    ],
+    [
+      "uvloop",
+      "process",
+      1,
+      13,
+      0,
+      0,
+      400
+    ],
+    [
+      "uvloop",
+      "process",
+      2,
+      13,
+      0,
+      0,
+      400
+    ],
+    [
+      "uvloop",
+      "process",
+      4,
+      13,
+      0,
+      0,
+      400
+    ],
+    [
+      "uvloop-proto",
+      "thread",
+      1,
+      13,
+      0,
+      0,
+      400
+    ],
+    [
+      "uvloop-proto",
+      "thread",
+      2,
+      13,
+      0,
+      0,
+      400
+    ],
+    [
+      "uvloop-proto",
+      "thread",
+      4,
+      13,
+      0,
+      0,
+      400
+    ],
+    [
+      "uvloop-proto",
+      "process",
+      1,
+      13,
+      0,
+      0,
+      400
+    ],
+    [
+      "uvloop-proto",
+      "process",
+      2,
+      13,
+      0,
+      0,
+      400
+    ],
+    [
+      "uvloop-proto",
+      "process",
+      4,
+      13,
+      0,
+      0,
+      400
+    ],
+    [
+      "uringpy",
+      "thread",
+      1,
+      13,
+      0,
+      0,
+      400
+    ],
+    [
+      "uringpy",
+      "thread",
+      2,
+      13,
+      0,
+      0,
+      400
+    ],
+    [
+      "uringpy",
+      "thread",
+      4,
+      13,
+      0,
+      0,
+      400
+    ],
+    [
+      "uringpy",
+      "process",
+      1,
+      13,
+      0,
+      0,
+      400
+    ],
+    [
+      "uringpy",
+      "process",
+      2,
+      13,
+      0,
+      0,
+      400
+    ],
+    [
+      "uringpy",
+      "process",
+      4,
+      13,
+      0,
+      0,
+      400
+    ]
+  ],
+  "client": {
+    "kernel": "7.0.0-1013-gcp",
+    "nproc": 8,
+    "python": "3.12.3",
+    "cpu_model": "AMD EPYC 7B13",
+    "machine_type": "t2d-standard-8",
+    "wrk": "wrk debian/4.1.0-4build2 [epoll] Copyright (C) 2012 Will Glozer",
+    "git_commit": "4780b0e62531ee4054eb45cc74fd585149b06e74",
+    "git_dirty": false
+  },
+  "server": {
+    "target": "marimuthu_vm@10.142.0.2",
+    "image": "uringpy:4780b0e-313-loops",
+    "kernel": "7.0.0-1013-gcp",
+    "nproc": "4",
+    "cpu_model": "AMD EPYC 7B13",
+    "machine_type": "t2d-standard-4",
+    "image_id": "sha256:92e10132a38c91292bd05212ecf08b6eef6bf4d9e3d74847ffd6aa57f8a71f9c",
+    "interpreter": "3.13.7 gil_on"
+  },
+  "finished_utc": "2026-10-08T15:52:02+00:00"
+}

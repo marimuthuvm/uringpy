@@ -6,16 +6,22 @@ Tables and quoted numbers for the experiments added in revision
     python3 benchmarks/make_revision_tables.py                    # -> <results>/tables/
     python3 benchmarks/make_revision_tables.py --out paper/tables
 
-Reads three folders the revision script writes:
+Reads the folders the revision script writes:
   small/           thread-mode configurations of factorial, app, gilbatch and
                    handler, with the interpreter's own count of GIL hand-offs
   small-py313/     the same image built for CPython 3.13, with the io_uring
                    asyncio loops checked (loopcheck-*.txt) and the baselines
                    measured
   large-openloop/  open-loop load (wrk2) at fixed request rates
+  cores-k2/, cores-k3/, cores-k4/
+                   the handler reactors, the C loop and the Python epoll loop
+                   with 2, 3 and 4 of the server's CPUs online
+  cores-openloop/  open-loop load again, with the per-request reactor also as
+                   processes (the uncontended reference) and at lower rates
 
 and, for the repeat check, the main run's folders (--main, default
-benchmarks/results). Writes tab_observed.tex, tab_openloop.tex and
+benchmarks/results). Writes tab_observed.tex, tab_openloop.tex (from
+cores-openloop/ when it is there, else large-openloop/), tab_cores.tex and
 revision.tex; every key in revision.tex starts with "rv:". Statistics come
 from make_tables.py and bench_matrix.py, so nothing is computed twice.
 """
@@ -130,6 +136,13 @@ OPENLOOP = [("uringpy-app", "thread", "Threads, GIL per request"),
             ("uringpy-app-batch", "thread", "Threads, GIL per batch"),
             ("uringpy-app-batch", "process", "Processes, GIL per batch"),
             ("uvloop-proto-app", "process", "\\code{uvloop} processes")]
+# The second open-loop run adds the per-request reactor as processes: the same
+# GIL work per request without a shared lock.
+OPENLOOP2 = [("uringpy-app", "thread", "Threads, per request"),
+             ("uringpy-app", "process", "Processes, per request"),
+             ("uringpy-app-batch", "thread", "Threads, per batch"),
+             ("uringpy-app-batch", "process", "Processes, per batch"),
+             ("uvloop-proto-app", "process", "\\code{uvloop} proc.")]
 
 
 def openloop_summary(cells):
@@ -144,8 +157,10 @@ def openloop_summary(cells):
         cs = [r for r in rows if r.get("srv_nvcsw") and r.get("srv_requests")]
         csw = (math.fsum(float(r["srv_nvcsw"]) for r in cs)
                / math.fsum(float(r["srv_requests"]) for r in cs)) if cs else float("nan")
+        p50s = [float(r["lat_p50_ms"]) for r in rows]
+        p99s = [float(r["lat_p99_ms"]) for r in rows]
         out[key] = dict(rps=m, hw=ci95(rps), n=len(rps), p50=_avg(rows, "lat_p50_ms"),
-                        p99=_avg(rows, "lat_p99_ms"), sustained=m >= 0.95 * key[2], gsw=gsw,
+                        p99=_avg(rows, "lat_p99_ms"), p50hw=ci95(p50s), p99hw=ci95(p99s), sustained=m >= 0.95 * key[2], gsw=gsw,
                         csw=csw, cli=_avg(rows, "client_cpu_pct"))
     return out
 
@@ -158,12 +173,12 @@ def _ms(x):
     return f"{x:.2f}"
 
 
-def tab_openloop(summary):
+def tab_openloop(summary, configs=OPENLOOP):
     rates = sorted({k[2] for k in summary})
     body, ns = [], set()
     for rate in rates:
         cells = []
-        for engine, mode, _ in OPENLOOP:
+        for engine, mode, _ in configs:
             s = summary.get((engine, mode, rate))
             if s is None:
                 cells += [mt.DASH, mt.DASH]
@@ -176,14 +191,14 @@ def tab_openloop(summary):
             cells += [p50, p99]
         body.append(" & ".join([f"{rate // 1000}k"] + cells) + " \\\\")
     peak = []
-    for engine, mode, _ in OPENLOOP:
+    for engine, mode, _ in configs:
         best = max((s["rps"] for k, s in summary.items() if k[:2] == (engine, mode)),
                    default=float("nan"))
         peak.append(f"\\multicolumn{{2}}{{c}}{{{best / 1e3:.0f}k}}")
     body += ["\\midrule", " & ".join(["highest"] + peak) + " \\\\"]
     head1 = " & ".join(["Offered"] + [f"\\multicolumn{{2}}{{c}}{{{lbl}}}"
-                                      for _, _, lbl in OPENLOOP]) + " \\\\"
-    head2 = " & ".join(["req/s"] + ["p50 & p99"] * len(OPENLOOP)) + " \\\\"
+                                      for _, _, lbl in configs]) + " \\\\"
+    head2 = " & ".join(["req/s"] + ["p50 & p99"] * len(configs)) + " \\\\"
     n = f"$n={min(ns)}$" if len(ns) == 1 else f"$n={min(ns)}$--${max(ns)}$"
     return mt.table(
         "table*",
@@ -192,10 +207,66 @@ def tab_openloop(summary):
         f"four-core server, 400 connections, runs of 30~s ({n}). Median and 99th-percentile "
         "latency in ms (means over repetitions), and the highest rate each configuration "
         "delivered.",
-        "tab:openloop", "@{}r" + "rr" * len(OPENLOOP) + "@{}", [head1, head2], body,
-        colsep="5pt",
+        "tab:openloop", "@{}r" + "rr" * len(configs) + "@{}", [head1, head2], body,
+        colsep="4pt" if len(configs) > 4 else "5pt",
         note=("$^{*}$ In italics: the configuration delivered less than 95\\% of the "
               "offered rate, so requests queued and latency grew without bound."))
+
+
+# --------------------------------------------------------------------------
+# CPUs online
+
+CORES = [("uringpy", "C loop, \\code{io\\_uring}, no Python"),
+         ("py-epoll", "Python loop, \\code{epoll}, GIL per call"),
+         ("c-epoll-app", "\\code{epoll} reactor, GIL per request"),
+         ("uringpy-app", "\\code{io\\_uring} reactor, GIL per request"),
+         ("c-epoll-app-batch", "\\code{epoll} reactor, GIL per batch"),
+         ("uringpy-app-batch", "\\code{io\\_uring} reactor, GIL per batch")]
+KS = (2, 3, 4)
+
+
+def cores_cells(cores):
+    """{(k, engine): (one thread, k threads, k processes)} for every k loaded."""
+    out = {}
+    for k, data in cores.items():
+        for engine, _ in CORES:
+            c1 = data.get("app", "on", engine, "thread", 1)
+            t = data.get("app", "on", engine, "thread", k)
+            p = data.get("app", "on", engine, "process", k)
+            if c1 is not None and t is not None and p is not None and c1.n and t.n and p.n:
+                out[(k, engine)] = (c1, t, p)
+    return out
+
+
+def tab_cores(cc):
+    ks = sorted({k for k, _ in cc})
+    body, used = [], []
+    for engine, label in CORES:
+        row = [label]
+        for k in ks:
+            c = cc.get((k, engine))
+            if c is None:
+                row += [mt.DASH] * 3
+                continue
+            c1, t, p = c
+            used += [c1, t, p]
+            row += [mt.ratio_pm(t, c1).split(" ")[0], mt.ratio_pm(t, p).split(" ")[0],
+                    fmt(t.csw)]
+        body.append(" & ".join(row) + " \\\\")
+        if engine in ("uringpy", "py-epoll", "uringpy-app"):
+            body.append("\\midrule")
+    head1 = (" & ".join([""] + [f"\\multicolumn{{3}}{{c}}{{{k} CPUs}}" for k in ks]) + " \\\\ "
+             + " ".join(f"\\cmidrule(lr){{{2 + 3 * i}-{4 + 3 * i}}}" for i in range(len(ks))))
+    head2 = " & ".join(["Configuration"] + ["$S_k$ & T/P & c.sw."] * len(ks)) + " \\\\"
+    return mt.table(
+        "table*",
+        "The four-core server with 2, 3 and 4 of its CPUs online (the others taken offline, "
+        "so the kernel's network processing has the same CPUs), $k$ worker threads or "
+        f"processes for $k$ CPUs, 400 connections ({mt.run_count(used)}). $S_k$: throughput "
+        "of $k$ threads over one thread on the same CPUs; T/P: $k$ threads over $k$ processes "
+        "of the same design; c.sw.: voluntary context switches of the server process per "
+        "request at $k$ threads.",
+        "tab:cores", "@{}l" + "rrr" * len(ks) + "@{}", [head1, head2], body, colsep="4pt")
 
 
 # --------------------------------------------------------------------------
@@ -205,9 +276,10 @@ RUN_COUNTS = {}
 
 
 def count_runs(results):
-    """Runs made and runs that succeeded, over the three revision folders."""
+    """Runs made and runs that succeeded, over the revision folders."""
     made = ok = 0
-    for sub in ("small", "small-py313", "large-openloop"):
+    for sub in ("small", "small-py313", "large-openloop", "cores-k2", "cores-k3", "cores-k4",
+                "cores-openloop"):
         top = os.path.join(results, sub)
         if not os.path.isdir(top):
             continue
@@ -241,7 +313,7 @@ def spearman(a, b):
     return num / den if den else float("nan")
 
 
-def numbers(data, main, py313, ol):
+def numbers(data, main, py313, ol, ol2, cc):
     out = {}
     for label, g, exp, engine, c1, c4 in observed_rows(data):
         name = f"{exp}/{engine}"
@@ -346,6 +418,59 @@ def numbers(data, main, py313, ol):
         best = max((s["rps"] for k, s in ol.items() if k[:2] == (engine, mode)), default=0)
         out[f"rv:ol:sustained:{engine}/{mode}"] = f"{max(keep) // 1000}k" if keep else mt.DASH
         out[f"rv:ol:peak:{engine}/{mode}"] = f"{best / 1e3:.0f}"
+    # second open-loop run (keys rv:ol2:...), with confidence half-widths
+    for (engine, mode, rate), s in ol2.items():
+        name = f"{engine}/{mode}/{rate // 1000}k"
+        out[f"rv:ol2:p50:{name}"] = _ms(s["p50"])
+        out[f"rv:ol2:p99:{name}"] = _ms(s["p99"])
+        out[f"rv:ol2:p50hw:{name}"] = _ms(s["p50hw"])
+        out[f"rv:ol2:p99hw:{name}"] = _ms(s["p99hw"])
+        out[f"rv:ol2:x:{name}"] = f"{s['rps'] / 1e3:.1f}"
+        out[f"rv:ol2:frac:{name}"] = f"{s['rps'] / rate:.3f}"
+        for q in ("gsw", "csw"):
+            if not mt.nan(s[q]):
+                out[f"rv:ol2:{q}:{name}"] = f"{s[q]:.3f}"
+        out[f"rv:ol2:cli:{name}"] = f"{s['cli']:.0f}"
+    if ol2:
+        for engine, mode, _ in OPENLOOP2:
+            keep = [k[2] for k, s in ol2.items() if k[:2] == (engine, mode) and s["sustained"]]
+            best = max((s["rps"] for k, s in ol2.items() if k[:2] == (engine, mode)), default=0)
+            out[f"rv:ol2:sustained:{engine}/{mode}"] = f"{max(keep) // 1000}k" if keep else mt.DASH
+            out[f"rv:ol2:peak:{engine}/{mode}"] = f"{best / 1e3:.0f}"
+        out["rv:ol2:cli-max"] = f"{max(v['cli'] for v in ol2.values()):.0f}"
+        # medians of threads over processes of the same design, at each rate
+        for rate in sorted({k[2] for k in ol2}):
+            for engine, tag in (("uringpy-app", "tp50"), ("uringpy-app-batch", "bp50")):
+                t, p = ol2.get((engine, "thread", rate)), ol2.get((engine, "process", rate))
+                if t and p:
+                    out[f"rv:ol2:{tag}:{rate // 1000}k"] = f"{t['p50'] / p['p50']:.2f}"
+    # CPUs online
+    for (k, engine), (c1, t, p) in cc.items():
+        name = f"k{k}:{engine}"
+        out[f"rv:S:{name}"] = mt.ratio_pm(t, c1).split(" ")[0]
+        out[f"rv:tp:{name}"] = mt.ratio_pm(t, p).split(" ")[0]
+        out[f"rv:x:{name}/1"] = f"{c1.mean / 1e3:.1f}"
+        out[f"rv:x:{name}/t"] = f"{t.mean / 1e3:.1f}"
+        out[f"rv:x:{name}/p"] = f"{p.mean / 1e3:.1f}"
+        for q, v in (("gsw", t.gil_switches), ("csw", t.csw)):
+            if not mt.nan(v):
+                out[f"rv:{q}:{name}"] = f"{v:.3f}"
+    for k in sorted({k for k, _ in cc}):
+        for per, bat, tag in (("uringpy-app", "uringpy-app-batch", "uring"),
+                              ("c-epoll-app", "c-epoll-app-batch", "epoll")):
+            a, b = cc.get((k, per)), cc.get((k, bat))
+            if a and b:
+                out[f"rv:bp:k{k}:{tag}"] = f"{b[1].mean / a[1].mean:.2f}"
+        pts = [(t.mean / c1.mean, t.csw, t.gil_switches)
+               for (kk, _), (c1, t, p) in cc.items() if kk == k]
+        out[f"rv:rho-csw:k{k}"] = f"{spearman([q[0] for q in pts], [q[1] for q in pts]):.2f}"
+        out[f"rv:rho-gsw:k{k}"] = f"{spearman([q[0] for q in pts], [q[2] for q in pts]):.2f}"
+        out[f"rv:rho-n:k{k}"] = str(len(pts))
+    tp = [t.mean / p.mean for (k, e), (c1, t, p) in cc.items()
+          if e in ("uringpy-app-batch", "c-epoll-app-batch")]
+    if tp:
+        out["rv:tp-batch-min"] = f"{min(tp):.2f}"
+        out["rv:tp-batch-max"] = f"{max(tp):.2f}"
     return out
 
 
@@ -362,10 +487,24 @@ def main(argv=None):
     py313 = mt.Data(*mt.load(os.path.join(args.results, "small-py313")))
     main_data = mt.Data(*mt.load(args.main))
     ol = openloop_summary(openloop_cells(os.path.join(args.results, "large-openloop")))
+    ol2_dir = os.path.join(args.results, "cores-openloop")
+    ol2 = openloop_summary(openloop_cells(ol2_dir)) if os.path.isdir(ol2_dir) else {}
+    cores = {k: mt.Data(*mt.load(os.path.join(args.results, f"cores-k{k}")))
+             for k in KS if os.path.isdir(os.path.join(args.results, f"cores-k{k}"))}
+    cc = cores_cells(cores)
     count_runs(args.results)
 
-    files = {"tab_observed.tex": tab_observed(data), "tab_openloop.tex": tab_openloop(ol)}
-    nums = numbers(data, main_data, py313, ol)
+    # The second open-loop run, with the uncontended reference, is the table;
+    # the first is kept as tab_openloop_first.tex.
+    files = {"tab_observed.tex": tab_observed(data)}
+    if ol2:
+        files["tab_openloop.tex"] = tab_openloop(ol2, OPENLOOP2)
+        files["tab_openloop_first.tex"] = tab_openloop(ol)
+    else:
+        files["tab_openloop.tex"] = tab_openloop(ol)
+    if cc:
+        files["tab_cores.tex"] = tab_cores(cc)
+    nums = numbers(data, main_data, py313, ol, ol2, cc)
     lines = ["% Generated by benchmarks/make_revision_tables.py -- do not edit by hand.",
              "\\makeatletter"]
     lines += [f"\\@namedef{{v@{k}}}{{{v}}}" for k, v in sorted(nums.items())]

@@ -367,6 +367,45 @@ The open-loop run was made with `PROFILE=large ONLY="wrk2 build tests
 L-openloop"` on the four-core pair, so its folder is
 `results-revision/large-openloop/` although the server had four cores.
 
+Outcome of the `PROFILE=cores` run at commit `bf38f8f` (2026-10-08 22:58 to
+2026-10-09 03:08 UTC, all 470 runs succeeded; tables `tab_cores.tex` and
+`tab_openloop.tex` from `make_revision_tables.py`; the first open-loop run is
+kept as `tab_openloop_first.tex`). Before every stage the host and a container
+both reported the number of CPUs wanted.
+
+- 5a confirmed. Batched threads delivered 0.95 to 0.99 of the same reactor's
+  processes at 2, 3 and 4 CPUs.
+- 5b confirmed. Batched over per-request threads: `epoll` reactor 1.39, 2.25,
+  3.43; `io_uring` reactor 1.04, 1.11, 1.32 at 2, 3, 4 CPUs.
+- 5c confirmed. Voluntary context switches per request of `c-epoll-app`
+  threads 0.137, 0.689, 1.403 and of `py-epoll` 0.096, 0.586, 2.002; the
+  batched reactors 0.012 or fewer.
+- 5d confirmed, narrowly at two CPUs: rank correlation of `S_k` with context
+  switches -0.71, -1.00, -0.94 (six configurations each).
+- 5e confirmed. `uringpy` threads within 1% of its processes at every `k`.
+- 5f refuted in one case: `py-epoll` threads scaled by 1.21 at two CPUs
+  (`c-epoll-app` 1.18); at three and four CPUs both stayed below 1.2.
+- 6a confirmed. Median of per-request threads over per-request processes:
+  1.01, 1.06, 1.16, 1.46, 1.63 at 10, 25, 50, 100, 150 thousand, and 119 at
+  200 thousand, where the threads delivered 95.9% of the offered rate with a
+  median of 177 ms. At 10 thousand the difference is inside the confidence
+  intervals.
+- 6b confirmed (1.01 and 1.06).
+- 6c confirmed. Batched threads over batched processes: 1.01 to 1.20 up to
+  100 thousand.
+- 6d confirmed. Per-request processes, batched threads and batched processes
+  all sustained 250 thousand; per-request threads 200 thousand, the lowest of
+  the four.
+- 6e confirmed, with the differences at 10 and 25 thousand inside the
+  confidence intervals.
+
+At light load both thread configurations changed the lock's owner about 0.6
+times per request (0.64 and 0.66 at 10 thousand) without costing latency:
+an owner change costs little when no other thread is waiting for the lock.
+The highest rates delivered agree with the first open-loop run (203 and 203
+thousand for per-request threads, 264 and 265 for batched threads, 277 and
+273 for batched processes, 210 and 210 for `uvloop` processes).
+
 The 2x2 design of `factorial`:
 
 | | loop in C, GIL released | loop in Python, GIL held |

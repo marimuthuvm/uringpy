@@ -13,11 +13,17 @@ that worker threads scale across cores **within one interpreter** on a standard
 > mainly fewer system calls but fewer **GIL hand-offs**. On one worker the
 > system-call interface and its batching are worth a modest factor. With several
 > worker threads, on a four-core server under saturating load, what separates
-> designs that scale from designs that lose throughput is how often the GIL is
-> given up per request, together with how much of a request runs under it. That
-> holds on `io_uring` and on `epoll`, and whether the loop is written in C or in
-> Python. Hand-offs were inferred from counters and interventions; the lock
-> itself was not traced.
+> designs that scale from designs that lose throughput is contention for the
+> GIL: how often it is given up per request, together with how much of a
+> request runs under it. That holds on `io_uring` and on `epoll`, and whether
+> the loop is written in C or in Python. CPython's own counter shows the lock
+> changing owner about once per request where threads lose throughput and
+> almost never where they scale; voluntary context switches, which also count
+> threads woken for the lock in vain, follow scaling more closely still. With
+> 2, 3 and 4 CPUs online the cost of per-request contention grows with every
+> core, while batched threads stay within 5% of processes. Below saturation,
+> threads that take the GIL per request answer as fast as processes at light
+> load and fall behind as the rate rises.
 
 ## Headline results
 
@@ -70,7 +76,7 @@ All numbers below were measured at commit `5db4eab` and are written into this fi
   - **Free-threaded build.** `asyncio` threads scale there (2.48×); uringpy keeps an advantage in speed per worker (1.46× at four workers on the transport path) and no longer one in scaling.
   - **Large responses.** With bodies of 16 KiB or more the network, not the server, was the limit.
   - On the transport path the C loop is only 1.12× faster at four workers than the Python loop on `io_uring`.
-- **What was not observed.** GIL hand-offs are inferred from counters (releases, acquisitions, voluntary context switches) and from the interventions above; the lock itself was not traced. Everything was measured on one four-core server under saturating closed-loop load.
+- **What these runs do not show.** In the main runs GIL hand-offs are inferred from counters (releases, acquisitions, voluntary context switches) and from the interventions above; the revision runs read them from CPython's own counter (`benchmarks/make_revision_tables.py`). Everything was measured on one four-core server, under saturating closed-loop load except for the open-loop runs, and with no more than four cores.
 
 <!-- results:end -->
 
@@ -206,9 +212,12 @@ bash benchmarks/run_paper_experiments.sh
 # 1600 connections and three more handler sizes
 BASE_COMMIT=<commit of the images> bash benchmarks/run_supplement.sh
 # revision: GIL hand-offs counted by the interpreter, the io_uring asyncio
-# loops on Python 3.13, and (after resizing the VMs) a server with more cores
+# loops on Python 3.13, open-loop load (wrk2), a server with more cores
+# (needs larger VMs; not run), and the same server with 2, 3 and 4 CPUs online
 PROFILE=small bash benchmarks/run_revision.sh
 PROFILE=large bash benchmarks/run_revision.sh
+PROFILE=cores bash benchmarks/run_revision.sh
+python3 benchmarks/make_revision_tables.py
 ```
 
 Defaults: 5 repetitions of 20 s after a 5 s warm-up, 400 connections; one
@@ -292,9 +301,10 @@ SERVER=user@host SERVER_IP=10.0.0.2 bash benchmarks/bodysize_bench.sh
   grows (the measured fractions are under "Headline results"). Longer handlers
   need process-level parallelism or the free-threaded build. With the lock busy
   for two thirds of the time at four workers, more cores would not help the
-  threads much; that was not measured.
-- The `io_uring`-based `asyncio` loops (`uringcore`, `uringloop`) could not be
-  measured on Python 3.14, so nothing here compares against them.
+  threads much; that was not measured beyond four cores.
+- The `io_uring`-based `asyncio` loops (`uringcore`, `uringloop`) failed this
+  load on Python 3.14 and on 3.13, a version both support, so nothing here
+  compares against them (checks in `benchmarks/results-revision/small-py313/`).
 - Not a drop-in `asyncio` replacement — it is a specialized reactor.
 - Both reactors reply once per `recv()` and do not parse HTTP framing, so
   pipelined or fragmented requests are not handled. Responses must be shorter

@@ -1926,10 +1926,12 @@ def headline_md(d):
     if limits:
         notes += ["- **Limits, measured.**"] + limits
     if notes:
-        notes.append("- **What was not observed.** GIL hand-offs are inferred from counters (releases, "
-                     "acquisitions, voluntary context switches) and from the interventions above; the "
-                     "lock itself was not traced. Everything was measured on one four-core server under "
-                     "saturating closed-loop load.")
+        notes.append("- **What these runs do not show.** In the main runs GIL hand-offs are inferred "
+                     "from counters (releases, acquisitions, voluntary context switches) and from the "
+                     "interventions above; the revision runs read them from CPython's own counter "
+                     "(`benchmarks/make_revision_tables.py`). Everything was measured on one four-core "
+                     "server, under saturating closed-loop load except for the open-loop runs, and "
+                     "with no more than four cores.")
     out += notes + ["", README_END]
     return "\n".join(out) + "\n"
 
