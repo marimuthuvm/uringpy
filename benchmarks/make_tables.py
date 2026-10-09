@@ -643,7 +643,7 @@ def tab_app(d):
                     fnum(c4.avg("lat_p99_ms") if c4 else None, 1)]) + " \\\\")
     if not body:
         return None
-    dagger = any("dagger" in line for line in body)
+    dagger = any("^\\dagger" in line for line in body)  # not \ddagger
     star = any("ast$" in line for line in body)
     notes = []
     if any(line.startswith(BUILD["off"]) for line in body):
@@ -692,7 +692,7 @@ def tab_gilbatch(d):
             fnum(c4.csw, 3)]) + " \\\\")
     if len(body) < 3:
         return None
-    dagger = any("dagger" in line for line in body)
+    dagger = any("^\\dagger" in line for line in body)  # not \ddagger
     return table(
         "table*",
         "Requests served per GIL acquisition (\\code{uringpy} with the handler, worker "
@@ -736,7 +736,7 @@ def tab_load(d):
                 ratio_pm(c4, c1) + _flagged(c4, c1),
                 DASH if c4 is None else "0" if c4.handoffs == 0 else fnum(c4.handoffs, 2),
                 fnum(c4.csw if c4 else None, 2)]) + " \\\\")
-    dagger = any("dagger" in line for line in body)
+    dagger = any("^\\dagger" in line for line in body)  # not \ddagger
     left_out = sum(f.get("excluded", 0) for f in d.folders if f["experiment"] == "load")
     notes = []
     raised = any("nofile" in ((f["meta"].get("params") or {}).get("docker_opts") or "")
@@ -750,15 +750,15 @@ def tab_load(d):
         notes.append(f"{left_out} runs with 1600 connections are not shown: that number "
                      "exceeded the server's limit on open files "
                      "(Section~\\ref{sec:threats}).")
+    if dagger:
+        notes.append("$^\\dagger$ A configuration in this ratio had a coefficient of variation "
+                     "above 5\\%.")
     if any("ddagger" in line for line in body):
         worst = max((_num(r, "socket_errors") / _num(r, "requests")
                      for c in used if c is not None for r in c.rows
                      if _num(r, "socket_errors") > 0 and _num(r, "requests") > 0), default=0.0)
         notes.append("$^{\\ddagger}$ Every run of this configuration reported socket errors, "
                      f"for at most {100 * worst:.3f}\\% of its requests.")
-    if dagger:
-        notes.append("$^\\dagger$ A configuration in this ratio had a coefficient of variation "
-                     "above 5\\%.")
     return table(
         "table",
         "Load varied: keep-alive connections opened by the client (worker threads, GIL "
@@ -798,7 +798,7 @@ def tab_loops(d):
                 fnum(cn.avg("lat_p99_ms") if cn else None, 1)]) + " \\\\")
     if not body:
         return None
-    dagger = any("dagger" in line for line in body)
+    dagger = any("^\\dagger" in line for line in body)  # not \ddagger
     cols = " & ".join(f"$N{{=}}{w}$" for w in workers)
     return table(
         "table*",
@@ -950,11 +950,11 @@ def tab_handler(d):
               + (" The rows without $S_2$ were measured in the supplementary run, at one and "
                  "four workers." if any(line.split(" & ")[6:7] == [DASH] for line in body)
                  else "")
+              + (" $^\\dagger$ A configuration in this ratio had a coefficient of variation "
+                 "above 5\\%." if dagger else "")
               + (" $^{\\ddagger}$ Runs behind this cell reported socket errors (at most "
                  f"{meta_sockerr_max(used):.2f}\\% of a run's requests)."
-                 if any("ddagger" in line for line in body) else "")
-              + (" $^\\dagger$ A configuration in this ratio had a coefficient of variation "
-                 "above 5\\%." if dagger else "")))
+                 if any("ddagger" in line for line in body) else "")))
 
 
 def tab_probe(d):
@@ -1164,7 +1164,7 @@ def fig_handoffs(d):
     for src, dst in ((code("py-epoll"), code("py-epoll-batch")), ("per request", "per batch")):
         if src in by_label and dst in by_label:
             a, b = by_label[src], by_label[dst]
-            body.append("\\draw[-{Stealth[length=1.6mm]}, black!45, line width=0.4pt, "
+            body.append("\\draw[-{Stealth[length=2.4mm, width=1.8mm]}, black!85, line width=0.9pt, "
                         "shorten <=2.5pt, shorten >=2.5pt] "
                         f"(axis cs:{a[0]:.5g},{a[1]:.5g}) -- (axis cs:{b[0]:.5g},{b[1]:.5g});")
     body += _plot("only marks, ink, mark=diamond*, mark options={fill=ink}, mark size=2.4pt",
