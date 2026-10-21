@@ -1,0 +1,25 @@
+\begin{table*}[t]
+\caption{Open-loop load: requests sent at fixed rates by \code{wrk2} (latency corrected for coordinated omission) to four workers with the default handler on the four-core server, 400 connections, runs of 30~s ($n=5$). Median and 99th-percentile latency in ms (means over repetitions), and the highest rate each configuration delivered.}
+\label{tab:openloop}
+\centering
+\footnotesize
+\setlength{\tabcolsep}{5pt}
+\begin{tabular}{@{}rrrrrrrrr@{}}
+\toprule
+Offered & \multicolumn{2}{c}{Threads, GIL per request} & \multicolumn{2}{c}{Threads, GIL per batch} & \multicolumn{2}{c}{Processes, GIL per batch} & \multicolumn{2}{c}{\code{uvloop} processes} \\
+req/s & p50 & p99 & p50 & p99 & p50 & p99 & p50 & p99 \\
+\midrule
+50k & 1.22 & 2.70 & 1.08 & 2.20 & 1.05 & 2.14 & 1.02 & 2.10 \\
+100k & 1.80 & 4.74 & 1.35 & 2.83 & 1.18 & 2.50 & 1.22 & 2.53 \\
+150k & 2.27 & 5.66 & 1.50 & 3.30 & 1.34 & 2.93 & 1.33 & 2.97 \\
+200k & 461 & 2,296 & 1.62 & 3.67 & 1.48 & 3.32 & 1.45 & 208 \\
+300k & \textit{6,136}$^{*}$ & \textit{11,278} & \textit{2,286}$^{*}$ & \textit{5,664} & \textit{1,255}$^{*}$ & \textit{4,484} & \textit{5,498}$^{*}$ & \textit{10,880} \\
+400k & \textit{9,588}$^{*}$ & \textit{15,492} & \textit{6,428}$^{*}$ & \textit{11,262} & \textit{5,574}$^{*}$ & \textit{11,034} & \textit{8,978}$^{*}$ & \textit{16,390} \\
+\midrule
+highest & \multicolumn{2}{c}{203k} & \multicolumn{2}{c}{264k} & \multicolumn{2}{c}{277k} & \multicolumn{2}{c}{210k} \\
+\bottomrule
+\end{tabular}
+
+\vspace{2pt}
+\parbox{\linewidth}{\footnotesize $^{*}$ In italics: the configuration delivered less than 95\% of the offered rate, so requests queued and latency grew without bound.}
+\end{table*}

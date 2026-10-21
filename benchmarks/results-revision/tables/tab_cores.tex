@@ -1,0 +1,23 @@
+\begin{table*}[t]
+\caption{The four-core server with 2, 3 and 4 of its CPUs online (the others taken offline, so the kernel's network processing has the same CPUs), $k$ worker threads or processes for $k$ CPUs, 400 connections ($n=5$). $S_k$: throughput of $k$ threads over one thread on the same CPUs; T/P: $k$ threads over $k$ processes of the same design; c.sw.: voluntary context switches of the server process per request at $k$ threads.}
+\label{tab:cores}
+\centering
+\footnotesize
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{@{}lrrrrrrrrr@{}}
+\toprule
+ & \multicolumn{3}{c}{2 CPUs} & \multicolumn{3}{c}{3 CPUs} & \multicolumn{3}{c}{4 CPUs} \\ \cmidrule(lr){2-4} \cmidrule(lr){5-7} \cmidrule(lr){8-10}
+Configuration & $S_k$ & T/P & c.sw. & $S_k$ & T/P & c.sw. & $S_k$ & T/P & c.sw. \\
+\midrule
+C loop, \code{io\_uring}, no Python & 1.45 & 0.99 & 0.000 & 1.85 & 0.99 & 0.001 & 2.30 & 1.00 & 0.001 \\
+\midrule
+Python loop, \code{epoll}, GIL per call & 1.21 & 0.82 & 0.096 & 1.03 & 0.52 & 0.586 & 0.67 & 0.27 & 2.002 \\
+\midrule
+\code{epoll} reactor, GIL per request & 1.18 & 0.80 & 0.137 & 0.98 & 0.48 & 0.689 & 0.78 & 0.31 & 1.403 \\
+\code{io\_uring} reactor, GIL per request & 1.48 & 0.98 & 0.028 & 1.73 & 0.88 & 0.103 & 1.78 & 0.74 & 0.301 \\
+\midrule
+\code{epoll} reactor, GIL per batch & 1.48 & 0.99 & 0.002 & 1.82 & 0.97 & 0.003 & 2.37 & 0.97 & 0.007 \\
+\code{io\_uring} reactor, GIL per batch & 1.45 & 0.99 & 0.002 & 1.77 & 0.95 & 0.005 & 2.26 & 0.96 & 0.012 \\
+\bottomrule
+\end{tabular}
+\end{table*}
